@@ -1,0 +1,30 @@
+# === Veri İşleme ===
+pandas==3.0.3
+numpy==2.5.0
+
+# === Makine Öğrenmesi ===
+scikit-learn==1.9.0
+lightgbm==4.6.0
+xgboost==3.3.0
+
+# === NLP & Embedding ===
+sentence-transformers==5.6.0
+rank_bm25==0.2.2
+transformers==5.12.1
+tokenizers==0.22.2
+
+# === Deep Learning Backend ===
+torch==2.12.1
+accelerate==1.14.0
+
+# === Görselleştirme ===
+matplotlib==3.11.0
+seaborn==0.13.2
+
+# === Notebook ===
+jupyter
+ipykernel
+
+# === Yardımcı ===
+tqdm==4.68.3
+scipy==1.18.0

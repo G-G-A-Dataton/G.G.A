@@ -61,17 +61,58 @@ G.G.A/
 
 ## 🚀 Kurulum
 
+### Gereksinimler
+
+- **Python** 3.10+
+- **Git LFS** (büyük veri dosyaları için)
+- GPU (opsiyonel, embedding hesaplama için önerilir)
+
+### Adım 1: Repoyu Klonla
+
 ```bash
-# Repoyu klonla (Git LFS gerekli)
 git lfs install
 git clone https://github.com/G-G-A-Dataton/G.G.A.git
 cd G.G.A
-
-# Python bağımlılıkları
-pip install pandas numpy scikit-learn lightgbm xgboost
-pip install sentence-transformers rank_bm25
-pip install matplotlib seaborn
 ```
+
+### Adım 2: Sanal Ortam Oluştur
+
+```bash
+python3 -m venv venv
+source venv/bin/activate        # Linux / macOS
+# venv\Scripts\activate         # Windows
+```
+
+### Adım 3: Bağımlılıkları Yükle
+
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### Adım 4: Kurulumu Doğrula
+
+```bash
+python -c "import pandas, numpy, torch, sentence_transformers, lightgbm; print('✅ Tüm paketler başarıyla yüklendi!')"
+```
+
+### 📦 Temel Bağımlılıklar
+
+| Paket | Versiyon | Açıklama |
+|---|---|---|
+| `pandas` | 3.0.3 | Veri işleme |
+| `numpy` | 2.5.0 | Sayısal hesaplama |
+| `scikit-learn` | 1.9.0 | ML araçları & metrikler |
+| `lightgbm` | 4.6.0 | Gradient boosting modeli |
+| `xgboost` | 3.3.0 | Gradient boosting modeli |
+| `sentence-transformers` | 5.6.0 | Metin embedding'leri |
+| `transformers` | 5.12.1 | NLP modelleri |
+| `torch` | 2.12.1 | Deep learning backend |
+| `rank_bm25` | 0.2.2 | BM25 metin araması |
+| `matplotlib` | 3.11.0 | Görselleştirme |
+| `seaborn` | 0.13.2 | İstatistiksel görselleştirme |
+
+> Tüm bağımlılıkların tam listesi için [requirements.txt](requirements.txt) dosyasına bakınız.
 
 ---
 
