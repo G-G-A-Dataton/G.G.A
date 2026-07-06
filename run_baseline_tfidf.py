@@ -108,27 +108,32 @@ lgbm_params = {
 }
 
 skf          = get_stratified_kfold(n_splits=5, random_state=42)
-fold_scores  = []
-oof_preds    = np.zeros(len(X))
-trained_models = []
+fold_scores  = []         # Her fold'un Macro-F1 skoru burada toplanır
+oof_preds    = np.zeros(len(X))  # Out-Of-Fold tahminler: threshold optimizasyonu için kullanılır
+trained_models = []       # Tüm fold modellerini saklıyoruz — submission sırasında ensemble yapılır
 
 for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), start=1):
     X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
     y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
+    # LightGBM veri formatına dönüştür (bellek dostu seyrek format)
     dtrain = lgb.Dataset(X_tr, label=y_tr)
     dval   = lgb.Dataset(X_val, label=y_val)
 
+    # Modeli eğit — early stopping ile gereksiz ağaç büyümesinin önüne geçiyoruz
     model = lgb.train(
         lgbm_params, dtrain,
-        num_boost_round=500,
+        num_boost_round=500,         # Maksimum ağaç sayısı
         valid_sets=[dval],
-        callbacks=[lgb.early_stopping(30, verbose=False), lgb.log_evaluation(period=-1)]
+        callbacks=[
+            lgb.early_stopping(30, verbose=False),  # 30 tur iyileşme olmadı mı? Dur.
+            lgb.log_evaluation(period=-1)            # Eğitim loglarını bastır
+        ]
     )
-    trained_models.append(model)
+    trained_models.append(model)  # Bu fold'un modeli saklanıyor
 
-    val_proba = model.predict(X_val)
-    oof_preds[val_idx] = val_proba
+    val_proba = model.predict(X_val)  # Validation seti olasılık tahminleri (0.0 - 1.0)
+    oof_preds[val_idx] = val_proba    # OOF dizisine bu fold'un tahminleri yazılıyor
     fold_f1 = macro_f1_from_proba(y_val, val_proba, threshold=0.5)
     fold_scores.append(fold_f1)
     print(f"  Fold {fold}/5  |  Macro-F1: {fold_f1:.4f}  |  Best iter: {model.best_iteration}")
@@ -139,16 +144,20 @@ print("-" * 50)
 print(f"  ORT. Macro-F1 (TF-IDF ile): {mean_f1:.4f} (+/- {std_f1:.4f})")
 
 # Threshold opt
+# OOF tahminleri üzerinde en iyi threshold'u bul:
+# Eğitimde görülmemiş verinin ortalaması → en gerçekçi threshold tahmini
 best_thresh, best_score, _ = find_best_threshold(y.values, oof_preds)
 print(f"  En iyi threshold          : {best_thresh}  ->  {best_score:.4f}")
 
 # ─── 7. Feature Importance ────────────────────────────────────────────────
 print("\n[7/7] Feature importance:")
 print("-" * 50)
+# Tüm fold modellerinin feature importance'larını ortalıyoruz.
+# Tek fold'un importance'ı yanıltıcı olabilir; ortalama daha kararlı (stable) sonuç verir.
 importance_arr = np.zeros(len(feature_cols_tfidf))
 for m in trained_models:
-    importance_arr += m.feature_importance(importance_type="gain")
-importance_arr /= len(trained_models)
+    importance_arr += m.feature_importance(importance_type="gain")  # 'gain' = bu feature olmasa kaybedeceğimiz bilgi miktarı
+importance_arr /= len(trained_models)  # 5 fold ortalaması
 
 feat_imp = pd.DataFrame({"feature": feature_cols_tfidf, "importance": importance_arr})
 feat_imp = feat_imp.sort_values("importance", ascending=False)

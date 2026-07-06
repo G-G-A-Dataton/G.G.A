@@ -159,19 +159,26 @@ def generate_submission(
     # Model(ler) ile tahmin yap — ensemble (ortalama)
     if verbose:
         print(f"\n[3/4] {len(models)} model ile tahmin yapiliyor (ensemble)...")
-    X_sub = sub_features[feature_cols]
+    X_sub = sub_features[feature_cols]  # Model, sadece bu kolonları görecek — sıralama önemli!
+
+    # Her fold'un modeli tahmin üretiyor; listeyi oluşturuyoruz
     proba_list = [model.predict(X_sub) for model in models]
-    # Tüm fold modellerinin tahminlerinin ortalamasını al
+
+    # Ensemble: tüm fold modellerinin olasılık tahminlerini ortalıyoruz.
+    # Ortalama, tek bir modelin aşırı uyumu (overfit) durumunu düzeltiyor.
     avg_proba = np.mean(proba_list, axis=0)
 
-    # Threshold ile binary'e çevir
+    # Olasılık (0.0-1.0) → Binary tahmin (0 veya 1)
+    # avg_proba >= threshold ise "alakalı (1)", aksi hâlde "alakasız (0)"
     predictions = (avg_proba >= threshold).astype(int)
     pos_rate = predictions.mean()
     if verbose:
         print(f"  Threshold         : {threshold}")
         print(f"  Pozitif oran      : {pos_rate:.2%}  ({predictions.sum():,} adet '1')")
 
-    # Submission DataFrame'i oluştur
+    # Submission DataFrame'ini oluştur
+    # id kolonu: sub_features["id"] → merge sonrası orijinal ID'ler korunuyor mu kontrol et!
+    # .values ile numpy dizisine al — index karışıklığını önler
     submission_out = pd.DataFrame({
         "id"        : sub_features["id"].values,
         "prediction": predictions

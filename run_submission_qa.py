@@ -73,15 +73,18 @@ def run_full_qa(submission_path: str) -> bool:
         sub_df = pd.read_csv(submission_path)
 
         # Kontrol 7: Pozitif oran makul mü?
-        # Çok düşük (<1%) veya çok yüksek (>99%) pozitif oran şüpheli
+        # submission_pairs.csv'deki gerçek dagilima göre %1-%99 arasi bekleniyor.
+        # Kaggle'daki geçmiş datathonlarda tipik pozitif oran %10-%50 arasi.
+        # <1% → model hep 0 dedi, bir şeyler yanlış
+        # >99% → model hep 1 dedi, threshold bozuk olabilir
         pos_rate = sub_df["prediction"].mean()
         if pos_rate < 0.01:
             extra_errors.append(
-                f"Pozitif oran cok dusuk: {pos_rate:.2%} (1% altinda — model hep 0 mi dedi?)"
+                f"Pozitif oran cok dusuk: {pos_rate:.2%} (1% altinda --- model hep 0 mi dedi?)"
             )
         elif pos_rate > 0.99:
             extra_errors.append(
-                f"Pozitif oran cok yuksek: {pos_rate:.2%} (99% ustunde — model hep 1 mi dedi?)"
+                f"Pozitif oran cok yuksek: {pos_rate:.2%} (99% ustunde --- model hep 1 mi dedi?)"
             )
         else:
             print(f"  [OK] Pozitif oran makul: {pos_rate:.2%}  "
