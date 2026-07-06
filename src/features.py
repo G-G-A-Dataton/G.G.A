@@ -3,20 +3,26 @@ src/features.py
 ===============
 G.G.A Takımı — Feature Engineering (Özellik Mühendisliği) Modülü
 
-Ahmet Emin Işın tarafından hazırlanmıştır. (3 Temmuz görevi)
+Ahmet Emin Işın tarafından hazırlanmıştır.
+3 Temmuz: Temel overlap ve cinsiyet feature'ları
+4 Temmuz: Yaş grubu uyumu ve demografik çelişki skoru eklendi
 
 Bu modül, her (sorgu, ürün) çifti için modelin öğrenebileceği sayısal
 özellikler (feature) üretir. Metin karşılaştırmalarına dayalı basit ama
 güçlü overlap (örtüşme) yöntemleri kullanır.
 
 Üretilen feature'lar:
+  --- Metin Benzerliği ---
   - query_title_overlap    : Sorgu ile ürün başlığı arasındaki kelime örtüşmesi
   - query_category_overlap : Sorgu ile ürün kategorisi arasındaki kelime örtüşmesi
   - query_brand_match      : Sorguda marka adı tam olarak geçiyor mu?
   - query_cat_l1_overlap   : Sorgu ile L1 kategori arasındaki örtüşme
-  - title_len              : Ürün başlığının uzunluğu (kısa başlıklar daha az bilgi içerir)
+  - title_len              : Ürün başlığının uzunluğu
   - query_len              : Sorgu metninin uzunluğu
-  - gender_match           : Sorgu ile ürün cinsiyeti uyumlu mu?
+  --- Demografik Özellikler (4 Temmuz) ---
+  - gender_match           : Sorgu ile ürün cinsiyeti uyumlu mu? (1=uyumlu, -1=çelişki, 0=belirsiz)
+  - age_group_match        : Sorguda yaş grubu sinyali var mı ve ürünle uyuşuyor mu?
+  - demographic_conflict   : Cinsiyet veya yaş grubu çelişkisi var mı? (0/1 binary)
 """
 
 import pandas as pd
@@ -178,6 +184,70 @@ def compute_gender_match(query, gender):
     return 0       # Belirsiz durum
 
 
+def compute_age_group_match(query, age_group):
+    """
+    Sorgu metni ile ürünün yaş grubu bilgisini karşılaştırır.
+
+    Sorguda yaş grubu sinyali (bebek, çocuk, genç, yetişkin) aranır
+    ve ürünün age_group etiketiyle karşılaştırılır.
+
+    Döndürülen değerler:
+       1  → Uyumlu (örn. sorguda 'bebek' var, ürün de bebek kategorisinde)
+      -1  → Çelişkili (örn. sorguda 'bebek' var, ürün 'yetişkin')
+       0  → Belirsiz (sorguda yaş sinyali yok ya da ürün 'unknown')
+    """
+    if not isinstance(query, str):
+        return 0
+
+    query_lower    = query.lower()
+    age_group_lower = str(age_group).lower() if pd.notna(age_group) else "unknown"
+
+    # Sorgudaki yaş grubu sinyalleri
+    # Her anahtar kelime hangi kategoriye işaret ediyor?
+    query_has_bebek  = any(k in query_lower for k in ["bebek", "baby", "infant"])
+    query_has_cocuk  = any(k in query_lower for k in ["çocuk", "cocuk", "kids", "kid", "child"])
+    query_has_genc   = any(k in query_lower for k in ["genç", "genc", "teen", "junior"])
+    query_has_yetis  = any(k in query_lower for k in ["yetişkin", "yetiskin", "adult"])
+
+    # Ürünün yaş grubu etiketi
+    item_bebek  = "bebek" in age_group_lower
+    item_cocuk  = "çocuk" in age_group_lower or "cocuk" in age_group_lower
+    item_genc   = "genç" in age_group_lower   or "genc" in age_group_lower
+    item_yetis  = "yetişkin" in age_group_lower or "yetiskin" in age_group_lower
+    item_belli  = age_group_lower not in ("unknown",)
+
+    # Uyumlu mu, çelişkili mi?
+    if query_has_bebek:
+        if item_bebek: return 1
+        if item_belli and not item_bebek: return -1
+    if query_has_cocuk:
+        if item_cocuk: return 1
+        if item_belli and not item_cocuk and not item_bebek: return -1
+    if query_has_genc:
+        if item_genc: return 1
+        if item_belli and not item_genc: return -1
+    if query_has_yetis:
+        if item_yetis: return 1
+        if item_belli and not item_yetis: return -1
+
+    return 0  # Belirsiz
+
+
+def compute_demographic_conflict(gender_match_val, age_group_match_val):
+    """
+    Cinsiyet VEYA yaş grubu çelişkisi var mı? (0: yok, 1: var)
+
+    Bu binary feature modelin 'kesinlikle alakasız' durumları hızlıca
+    öğrenmesi için tasarlanmıştır. Çelişki varsa label=0 olma ihtimali
+    çok yüksektir.
+
+    Örnek:
+      Sorgu: 'erkek çocuk ayakkabı'  + Ürün gender='kadın' → conflict=1
+      Sorgu: 'bebek kıyafeti'         + Ürün age_group='yetişkin' → conflict=1
+    """
+    return 1 if (gender_match_val == -1 or age_group_match_val == -1) else 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Ana Feature Builder
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,6 +306,18 @@ def build_features(df):
         lambda r: compute_gender_match(r["query"], r.get("gender", "unknown")), axis=1
     )
 
+    # ── 4 Temmuz: Demografik feature'lar ──────────────────────────────────────
+    print("[features] age_group_match hesaplanıyor...")
+    out["age_group_match"] = out.apply(
+        lambda r: compute_age_group_match(r["query"], r.get("age_group", "unknown")), axis=1
+    )
+
+    print("[features] demographic_conflict hesaplanıyor...")
+    # gender_match ve age_group_match hesaplandıktan SONRA çalıştırılmalı
+    out["demographic_conflict"] = out.apply(
+        lambda r: compute_demographic_conflict(r["gender_match"], r["age_group_match"]), axis=1
+    )
+
     print("[features] Tum feature'lar hesaplandi.")
     return out
 
@@ -243,13 +325,17 @@ def build_features(df):
 # Bu modülde üretilen feature kolonlarının tam listesi
 # Modeli eğitirken X = df[FEATURE_COLS] olarak kullanılır
 FEATURE_COLS = [
+    # Metin benzerliği feature'ları (3 Temmuz)
     "query_title_overlap",
     "query_category_overlap",
     "query_brand_match",
     "query_cat_l1_overlap",
     "title_len",
     "query_len",
+    # Demografik feature'lar (4 Temmuz)
     "gender_match",
+    "age_group_match",
+    "demographic_conflict",
 ]
 
 
