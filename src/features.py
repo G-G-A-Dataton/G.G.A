@@ -397,6 +397,11 @@ def build_features(df):
     )
 
     # ── 6 Temmuz: Kategori Seviye Feature'ları ────────────────────────────────────
+    # query_cat_l1_overlap tek başına yetersiz kalıyordu:
+    # "ayakkabı" çok geneldi — spor, topuklu, terlik hepsini kapsıyor.
+    # L2 ve L3 ile daha spesifik eşleşme yapılabilir:
+    #   query="spor ayakkabı"  + cat_l2="spor ayakkabı" → güçlü sinyal
+    #   query="sneaker"        + cat_l3="sneaker"       → çok güçlü sinyal
     print("[features] query_cat_l2_overlap hesaplanıyor...")
     out["query_cat_l2_overlap"] = out.apply(
         lambda r: compute_query_cat_l2_overlap(r["query"], r["category"]), axis=1
@@ -408,7 +413,9 @@ def build_features(df):
     )
 
     print("[features] cat_depth hesaplanıyor...")
-    # Kategori derinliği çok hızlı — vektörel hesaplanabilir
+    # cat_depth: "ayakkabı" = 1, "ayakkabı/spor" = 2, "ayakkabı/spor/sneaker" = 3
+    # Derin kategoriler daha spesifik ürünlere işaret eder — model bunu öğrenebilir
+    # apply() yerine .apply(func) kullanıyoruz — satır değil kolon başına fonksiyon
     out["cat_depth"] = out["category"].apply(compute_cat_depth)
 
     print("[features] Tum feature'lar hesaplandi.")
