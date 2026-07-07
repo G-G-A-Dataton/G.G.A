@@ -73,9 +73,9 @@ def train_and_eval(pos_df, neg_df, terms_df, items_df, label):
     dict
         Deney sonuçları: mean_f1, std_f1, best_threshold, best_f1
     """
-    print(f"\n{'─'*55}")
+    print(f"\n" + "-"*55)
     print(f"  Strateji: {label}")
-    print(f"{'─'*55}")
+    print("-"*55)
 
     # Pozitif ve negatif örnekleri birleştir, karıştır
     pos_df = pos_df[["term_id", "item_id"]].copy()
@@ -147,7 +147,7 @@ def train_and_eval(pos_df, neg_df, terms_df, items_df, label):
     best_thresh, best_f1, _ = find_best_threshold(y.values, oof_preds)
 
     print(f"\n  Ort. Macro-F1 : {mean_f1:.4f} +/- {std_f1:.4f}")
-    print(f"  En iyi thresh : {best_thresh}  ->  {best_f1:.4f}")
+    print(f"  En iyi thresh : {best_thresh} -> {best_f1:.4f}")
 
     return {
         "strateji"      : label,
@@ -162,8 +162,8 @@ def train_and_eval(pos_df, neg_df, terms_df, items_df, label):
 
 def main(bm25_path=None):
     print("=" * 55)
-    print("  G.G.A — Hard Negative vs Random Negative Kiyasi")
-    print("  7 Temmuz 2026 — Omer Faruk Kara")
+    print("  G.G.A - Hard Negative vs Random Negative Kiyasi")
+    print("  7 Temmuz 2026 - Omer Faruk Kara")
     print("=" * 55)
 
     # ─── 1. Veri yükle ───────────────────────────────────────────────────────
@@ -240,8 +240,10 @@ def main(bm25_path=None):
         r_f1    = results[0]["best_f1"]
         bm25_f1 = results[1]["best_f1"]
         diff    = bm25_f1 - r_f1
-        print(f"\n  BM25 kazanimi: {diff:+.4f}  ({'Pozitif etki!' if diff > 0 else 'Negatif etki — random daha iyi?'})")
-        print(f"  Sonuc: {'BM25 kullanilmali' if diff > 0.002 else 'Fark kucuk, daha fazla veri gerekebilir'}")
+        etki    = 'Pozitif etki!' if diff > 0 else 'Negatif etki - random daha iyi?'
+        sonuc   = 'BM25 kullanilmali' if diff > 0.002 else 'Fark kucuk, daha fazla veri gerekebilir'
+        print(f"\n  BM25 kazanimi: {diff:+.4f}  ({etki})")
+        print(f"  Sonuc: {sonuc}")
 
     # Sonuçları kaydet
     out_csv = os.path.join(OUTPUT_DIR, "hard_neg_comparison.csv")
