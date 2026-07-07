@@ -21,6 +21,8 @@ Her submission veya önemli local validation sonucu buraya eklenir.
 | EXP-001 | 3 Tem | Ömer Faruk | LightGBM | Random 3:1 / 5K poz | 7 temel | 0.9613 ± 0.0013 | — | Baseline v0, threshold opt. → 0.9621 |
 | EXP-002 | 4 Tem | Ömer Faruk | LightGBM | Random 3:1 / 5K poz | 9 (7 + demografik) | TBD | — | age_group_match + demographic_conflict |
 | EXP-003 | 4 Tem | Muhammed | LightGBM | Random 3:1 / 5K poz | 10 (9 + TF-IDF) | **0.9699 ± 0.0028** | — | TF-IDF #1 importance, +0.0086 kazanım |
+| EXP-004 | 6 Tem | Ahmet Emin | LightGBM | Random 3:1 / 3K poz | 12 (10 + L2/L3/depth) | TBD | — | Kategori seviye feature'ları eklendi |
+| EXP-005 | 7 Tem | Ömer Faruk | LightGBM | Random 3:1 / 3K poz | 12 temel | **0.9622 ± 0.0022** | — | Hard neg. baseline (BM25 bekleniyor), thresh=0.4 → 0.9625 |
 
 ---
 
