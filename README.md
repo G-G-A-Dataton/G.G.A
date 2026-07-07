@@ -45,17 +45,54 @@ G.G.A/
 │   └── sample_submission.csv
 ├── docs/                    # Dokümantasyon
 │   ├── Rehber.md            # Sıfırdan başlayanlar için tam rehber
+│   ├── EDA_notlari_v0.md    # İlk veri analizi ve veri sözlüğü
+│   ├── EDA_on_raporu.md     # Kategori, marka dağılımları ve 50 pozitif çift analizi
+│   ├── REPO_CALISMA_STANDARDI.md # Ekip çalışma ve Git yönergeleri
 │   └── yarışma/             # Resmi yarışma belgeleri
-│       ├── şartname.md
-│       ├── genel-kurallar.md
-│       ├── etik-kuralar.md
-│       ├── Yarışma Hakkında.md
-│       ├── Yarışma Takvimi.md
-│       └── takım.md
+├── notebooks/               # Jupyter Notebooklar (Deneyler)
+│   ├── 01_merge_and_test_mustafa.ipynb # Veri birleştirme ve bellek testi
+│   └── 02_baseline_lgbm_omerfaruk.ipynb # Baseline LightGBM modeli eğitim süreci
+├── src/                     # Üretim (Production) Kodları
+│   ├── __init__.py
+│   ├── data.py              # Bellek dostu veri yükleme ve merge pipeline'ı
+│   ├── data_quality.py      # Veri kalite kontrol ve sızıntı testleri
+│   ├── features.py          # Kelime örtüşmesi ve cinsiyet uyumu feature'ları
+│   ├── metrics.py           # Macro-F1 ve 5-Fold Stratified K-Fold validation şeması
+│   ├── negative_sampling.py # Sızıntı korumalı rastgele negatif örnek üretici
+│   ├── tfidf_features.py    # TF-IDF cosine similarity feature üretimi
+│   └── validate_submission.py # Kaggle submission format doğrulaması
+├── verify_pipeline.py       # Veri yükleme doğrulama scripti
+├── run_baseline.py          # LightGBM baseline model çalıştırma scripti
 ├── .gitignore
 ├── LICENSE
 └── README.md
 ```
+
+---
+
+## 🛠️ Nasıl Çalıştırılır?
+
+Projenin veri yükleme hattını veya baseline model eğitimini yerel bilgisayarınızda çalıştırmak için aşağıdaki adımları takip edebilirsiniz.
+
+### 1. Veri Yükleme Hattını Test Etme
+Bellek optimizasyonlu veri yükleme ve birleştirme (merge) aşamasını test etmek için:
+```bash
+python verify_pipeline.py
+```
+
+### 2. LightGBM Baseline Modelini Çalıştırma
+5-Fold Çapraz Doğrulama (Cross-Validation) ile 20.000 satırlık örnek veri üzerinde LightGBM baseline eğitimini başlatmak, threshold optimizasyonu yapmak ve feature importance değerlerini görmek için:
+```bash
+python run_baseline.py
+```
+
+### 3. Notebook Üzerinden Adım Adım İnceleme
+Görsel sonuçları ve eğitim detaylarını Jupyter Notebook üzerinden izlemek için:
+```bash
+jupyter notebook
+# Tarayıcıda notebooks/02_baseline_lgbm_omerfaruk.ipynb dosyasını açıp çalıştırın.
+```
+
 
 ---
 
