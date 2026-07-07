@@ -14,11 +14,15 @@ güçlü overlap (örtüşme) yöntemleri kullanır.
 Üretilen feature'lar:
   --- Metin Benzerliği ---
   - query_title_overlap    : Sorgu ile ürün başlığı arasındaki kelime örtüşmesi
-  - query_category_overlap : Sorgu ile ürün kategorisi arasındaki kelime örtüşmesi
+  - query_category_overlap : Sorgu ile ürün kategorisinin tamamı arasındaki kelime örtüşmesi
   - query_brand_match      : Sorguda marka adı tam olarak geçiyor mu?
-  - query_cat_l1_overlap   : Sorgu ile L1 kategori arasındaki örtüşme
+  - query_cat_l1_overlap   : Sorgu ile L1 (en genel) kategori arasındaki örtüşme
   - title_len              : Ürün başlığının uzunluğu
   - query_len              : Sorgu metninin uzunluğu
+  --- Kategori Seviyeleri (6 Temmuz) ---
+  - query_cat_l2_overlap   : Sorgu ile L2 (orta) kategori arasındaki örtüşme
+  - query_cat_l3_overlap   : Sorgu ile L3 (en spesifik) kategori arasındaki örtüşme
+  - cat_depth              : Kategori hiyerarşisinin derinliği (kaç seviye var?)
   --- Demografik Özellikler (4 Temmuz) ---
   - gender_match           : Sorgu ile ürün cinsiyeti uyumlu mu? (1=uyumlu, -1=çelişki, 0=belirsiz)
   - age_group_match        : Sorguda yaş grubu sinyali var mı ve ürünle uyuşuyor mu?
@@ -248,6 +252,80 @@ def compute_demographic_conflict(gender_match_val, age_group_match_val):
     return 1 if (gender_match_val == -1 or age_group_match_val == -1) else 0
 
 
+# ───────────────────────────────────────────────────────────────────────────────
+# 2b. Kategori Seviye Feature'ları (6 Temmuz)
+# ───────────────────────────────────────────────────────────────────────────────
+
+def split_category_levels(category):
+    """
+    Kategori hiyerarşisini seviyelerine ayırır.
+
+    Trendyol kategorileri '/' ile ayrılan 1-4 seviyeli hiyerarşiler içerir.
+      Örnek: "ayakkabı/spor ayakkabı/sneaker"
+        L1 (en genel)   : "ayakkabı"
+        L2 (orta)       : "spor ayakkabı"
+        L3 (en spesifik): "sneaker"
+
+    Seviye yoksa boş string döndürür (NaN değil — fonksiyonlar bunu handle eder).
+    """
+    if not isinstance(category, str):
+        return "", "", "", 0
+    parts = [p.strip() for p in category.split("/")]
+    depth = len(parts)  # Kaç seviye olduğunu say
+    l1 = parts[0] if depth >= 1 else ""
+    l2 = parts[1] if depth >= 2 else ""
+    l3 = parts[2] if depth >= 3 else ""
+    return l1, l2, l3, depth
+
+
+def compute_query_cat_l2_overlap(query, category):
+    """
+    Sorgu ile kategorinin ikinci seviyesi (L2) arasındaki Jaccard benzerliğini hesaplar.
+
+    L1 ("ayakkabı") çok genel, L3 ("sneaker") çok spesifik olabilir.
+    L2 ("spor ayakkabı") genellikle en anlamlı orta noktadır.
+
+    Örnek:
+      category = "ayakkabı/spor ayakkabı/sneaker"  →  L2 = "spor ayakkabı"
+      query    = "erkek spor ayakkabı"
+      → "spor", "ayakkabı" her iki tarafta da var → yüksek L2 örtüşmesi
+    """
+    _, l2, _, _ = split_category_levels(category)
+    return jaccard_overlap(query, l2)
+
+
+def compute_query_cat_l3_overlap(query, category):
+    """
+    Sorgu ile kategorinin üçüncü seviyesi (L3) arasındaki Jaccard benzerliğini hesaplar.
+
+    L3 en spesifik alt-kategoridir. Kullanıcı "sneaker" yazan bir sorgu yaptıysa
+    ve ürün de sneaker kategorisindeyse bu çok güçlü bir sinyal.
+    Ancak çoğu sorguda bu kadar detay olmaz, dolayısıyla çoğunlukla 0.0 döner.
+
+    Örnek:
+      category = "ayakkabı/spor ayakkabı/sneaker"  →  L3 = "sneaker"
+      query    = "erkek sneaker"
+      → "sneaker" her iki tarafta da var → yüksek L3 örtüşmesi
+    """
+    _, _, l3, _ = split_category_levels(category)
+    return jaccard_overlap(query, l3)
+
+
+def compute_cat_depth(category):
+    """
+    Kategori hiyerarşisinin derinliğini (seviye sayısını) döndürür.
+
+    Bu feature dolaylı bir bilgi taşır: derinliği yüksek kategoriler
+    genellikle daha spesifik ürünlerdir (daha az belirsizlik).
+
+    Örnekler:
+      "ayakkabı"                       → depth=1 (sadece l1)
+      "ayakkabı/spor ayakkabı"          → depth=2
+      "ayakkabı/spor ayakkabı/sneaker"  → depth=3
+    """
+    _, _, _, depth = split_category_levels(category)
+    return depth
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Ana Feature Builder
 # ─────────────────────────────────────────────────────────────────────────────
@@ -318,6 +396,21 @@ def build_features(df):
         lambda r: compute_demographic_conflict(r["gender_match"], r["age_group_match"]), axis=1
     )
 
+    # ── 6 Temmuz: Kategori Seviye Feature'ları ────────────────────────────────────
+    print("[features] query_cat_l2_overlap hesaplanıyor...")
+    out["query_cat_l2_overlap"] = out.apply(
+        lambda r: compute_query_cat_l2_overlap(r["query"], r["category"]), axis=1
+    )
+
+    print("[features] query_cat_l3_overlap hesaplanıyor...")
+    out["query_cat_l3_overlap"] = out.apply(
+        lambda r: compute_query_cat_l3_overlap(r["query"], r["category"]), axis=1
+    )
+
+    print("[features] cat_depth hesaplanıyor...")
+    # Kategori derinliği çok hızlı — vektörel hesaplanabilir
+    out["cat_depth"] = out["category"].apply(compute_cat_depth)
+
     print("[features] Tum feature'lar hesaplandi.")
     return out
 
@@ -336,6 +429,10 @@ FEATURE_COLS = [
     "gender_match",
     "age_group_match",
     "demographic_conflict",
+    # Kategori seviye feature'ları (6 Temmuz)
+    "query_cat_l2_overlap",
+    "query_cat_l3_overlap",
+    "cat_depth",
 ]
 
 
