@@ -3,7 +3,10 @@ src/tfidf_features.py
 =====================
 G.G.A Takımı — TF-IDF Cosine Similarity Feature Modülü
 
-Muhammed Köseoğlu tarafından hazırlanmıştır. (3 Temmuz görevi)
+Muhammed Köseoğlu tarafından hazırlanmıştır.
+3 Temmuz: Temel modül
+6 Temmuz: Hiperparametre deneyleri sonucu varsayılan parametreler güncellendi
+  Deney detayları: docs/tfidf_deney_tablosu.md
 
 TF-IDF Nedir?
   TF-IDF (Term Frequency - Inverse Document Frequency):
@@ -37,9 +40,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 def build_tfidf_vectorizer(
     terms_df: pd.DataFrame,
     items_df: pd.DataFrame,
-    max_features: int = 50_000,
-    ngram_range: tuple = (1, 2),
-    min_df: int = 2,
+    max_features: int = 10_000,   # 6 Tem deney: 10K unigram > 30K/50K bigram (sep: 0.4464 vs 0.3307)
+    ngram_range: tuple = (1, 1),  # 6 Tem deney: unigram kazandı (Türkçe çekimli dil — bigram sulanıyor)
+    min_df: int = 2,              # 6 Tem deney: min_df etkisi ihmal edilebilir, 2 seçildi
 ) -> TfidfVectorizer:
     """
     Tüm sorgu ve ürün metinlerini kullanarak TF-IDF vectorizer'ı eğitir.
@@ -54,10 +57,14 @@ def build_tfidf_vectorizer(
         Sorgular (query kolonu içerir).
     items_df : pd.DataFrame
         Ürün kataloğu (title, category, brand kolonları içerir).
-    max_features : int, default=50_000
-        En sık geçen kaç kelime tutulacak. Bellek sınırı.
-    ngram_range : tuple, default=(1, 2)
-        (1,2) → Tek kelimeler (unigram) ve ikili kelime çiftleri (bigram) kullan.
+    max_features : int, default=10_000
+        En sık geçen kaç kelime tutulacak.
+        6 Temmuz deneyi: 10K, 30K, 50K karşılaştırıldı — 10K en iyi separation verdi.
+        Büyük vocab'da IDF dağılımı düzleşiyor, ayırt edicilik düşüyor.
+    ngram_range : tuple, default=(1, 1)
+        Unigram kullanılıyor.
+        6 Temmuz deneyi: bigram ve trigram unigram'dan belirgin düşük çıktı.
+        Türkçe'de kelimeler zaten çekimli — bigram oluşturmak kelime dağarcığını sulandırıyor.
         "spor ayakkabı" gibi çift kelimeli anlamlı kombinasyonları yakalar.
     min_df : int, default=2
         En az kaç belgede geçen kelimeler alınsın. Nadir yazım hatalarını eler.
