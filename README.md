@@ -50,12 +50,13 @@ G.G.A/
 │   ├── REPO_CALISMA_STANDARDI.md # Ekip çalışma ve Git yönergeleri
 │   └── yarışma/             # Resmi yarışma belgeleri
 ├── notebooks/               # Jupyter Notebooklar (Deneyler)
-│   ├── 01_merge_and_test_mustafa.ipynb # Veri birleştirme ve bellek testi
-│   └── 02_baseline_lgbm_omerfaruk.ipynb # Baseline LightGBM modeli eğitim süreci
+│   ├── 01_veri_kalite_mert.py        # Veri kalite kontrolü (K1-K6)
+│   ├── 02_negative_sampling_mert.py  # Random negative üretimi (1:1/3:1/5:1)
+│   ├── 03_negatif_kalite_mert.py     # Negatif örneklerin bağımsız doğrulaması
+│   └── 04_baseline_lgbm_omerfaruk.ipynb # Baseline LightGBM modeli eğitim süreci
 ├── src/                     # Üretim (Production) Kodları
 │   ├── __init__.py
 │   ├── data.py              # Bellek dostu veri yükleme ve merge pipeline'ı
-│   ├── data_quality.py      # Veri kalite kontrol ve sızıntı testleri
 │   ├── features.py          # Kelime örtüşmesi ve cinsiyet uyumu feature'ları
 │   ├── metrics.py           # Macro-F1 ve 5-Fold Stratified K-Fold validation şeması
 │   ├── negative_sampling.py # Sızıntı korumalı rastgele negatif örnek üretici
@@ -90,7 +91,7 @@ python run_baseline.py
 Görsel sonuçları ve eğitim detaylarını Jupyter Notebook üzerinden izlemek için:
 ```bash
 jupyter notebook
-# Tarayıcıda notebooks/02_baseline_lgbm_omerfaruk.ipynb dosyasını açıp çalıştırın.
+# Tarayıcıda notebooks/04_baseline_lgbm_omerfaruk.ipynb dosyasını açıp çalıştırın.
 ```
 
 

@@ -123,13 +123,15 @@
 ```
 src/
 ├── data.py              ✅ Bellek optimizasyonlu veri yükleme
-├── data_quality.py      ✅ Veri kalite kontrol (0 sızıntı, 0 merge kaybı)
 ├── features.py          ✅ 9 feature (7 temel + 2 demografik)
 ├── metrics.py           ✅ Macro-F1 + Stratified KFold + threshold opt.
 ├── negative_sampling.py ✅ Sızıntısız random negative (1:1/3:1/5:1)
 ├── tfidf_features.py    ✅ TF-IDF cosine similarity (ayırıcılık: +0.37)
 ├── submission.py        ✅ Batch submission üretimi + ensemble
 └── validate_submission.py ✅ 5+2 aşamalı format kontrolü
+
+notebooks/
+└── 01_veri_kalite_mert.py ✅ Veri kalite kontrol (0 sızıntı, 0 merge kaybı)
 ```
 
 ### Çalıştırma Scriptleri

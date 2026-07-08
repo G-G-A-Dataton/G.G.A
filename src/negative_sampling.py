@@ -64,53 +64,60 @@ def generate_random_negatives(
     pd.DataFrame
         Kolonlar: term_id, item_id, label (hepsi 0)
     """
-    rng = np.random.default_rng(random_state)  # Seed'li rastgele üreteci
+    # NOT (performans): Önceki sürüm her term için `[x for x in all_item_ids
+    # if x not in pos_set]` ile TÜM katalogu Python döngüsünde tarıyordu.
+    # Bu, term sayısı x katalog boyutu kadar işlem demek (gerçek veride
+    # ~50K term x ~963K item ≈ 48 milyar adım) — pratikte bitmiyor.
+    # Bunun yerine "reddetmeli örnekleme" (rejection sampling) kullanıyoruz:
+    # tüm ihtiyacı tek seferde vektörize üret, geçersizleri ele, sadece
+    # elenenler için tekrar dene. Sonuç aynı (term başına tam `ratio` adet,
+    # asla pozitifle çakışmayan negatif) ama birkaç turda ve tamamen
+    # pandas/numpy vektör işlemleriyle biter.
+    rng = np.random.default_rng(random_state)
+    all_item_ids = items_df["item_id"].to_numpy()
 
-    # Tüm ürün ID'lerini numpy dizisine al (hızlı rastgele seçim için)
-    all_item_ids = items_df["item_id"].values
+    pozitif_anahtarlar = set(train_df["term_id"] + "|" + train_df["item_id"])
 
-    # Her sorgu için hangi ürünlerin pozitif olduğunu bir sözlükte tut.
-    # Bu sayede "yanlışlıkla pozitif ürünü negatif seçme" hatasını önlüyoruz.
-    term_to_positives = (
-        train_df.groupby("term_id")["item_id"].apply(set).to_dict()
-    )
+    # Her pozitif çiftin term'ini 'ratio' kez tekrarla → term ağırlığı
+    # pozitiflerdeki ile aynı kalır (bir term'in 10 pozitifi varsa 10*ratio
+    # negatif üretilir).
+    uretilecek_termler = np.repeat(train_df["term_id"].to_numpy(), ratio)
+    hedef = len(uretilecek_termler)
 
-    negatives = []
-    total_terms = len(term_to_positives)
+    kabul_edilenler = []
+    kabul_anahtarlari = set()
+    tur = 0
 
-    for i, (term_id, pos_items) in enumerate(term_to_positives.items()):
-        # Her bir pozitif çift için 'ratio' kadar negatif üret
-        needed = len(pos_items) * ratio
+    while len(uretilecek_termler) > 0:
+        tur += 1
+        adaylar = pd.DataFrame({
+            "term_id": uretilecek_termler,
+            "item_id": rng.choice(all_item_ids, size=len(uretilecek_termler)),
+        })
+        anahtar = adaylar["term_id"] + "|" + adaylar["item_id"]
 
-        # GÜVENLİ YÖNTEM: Pozitif ürünleri önceden havuzdan çıkar,
-        # geri kalanlar arasından rastgele seç → sızıntı MÜMKÜN DEĞİL.
-        pos_set = pos_items  # Bu term için bilinen tüm pozitif item_id'ler
-        safe_pool = np.array([x for x in all_item_ids if x not in pos_set])
+        gecerli = (
+            ~anahtar.isin(pozitif_anahtarlar)   # pozitifle çakışmıyor
+            & ~anahtar.isin(kabul_anahtarlari)  # önceki turlarla tekrar değil
+            & ~anahtar.duplicated()             # bu tur içinde tekrar değil
+        )
+        kabul_edilenler.append(adaylar[gecerli])
+        kabul_anahtarlari.update(anahtar[gecerli])
 
-        # Yeterli aday olduğundan emin ol
-        if len(safe_pool) < needed:
-            needed = len(safe_pool)  # Katalog çok küçükse sınırla (nadir)
+        if verbose:
+            print(f"  [negative_sampling] tur {tur}: {gecerli.sum():,} kabul, "
+                  f"{(~gecerli).sum():,} elendi (kalan hedef: {len(uretilecek_termler) - gecerli.sum():,})")
 
-        # Rastgele 'needed' kadar aday seç
-        chosen = rng.choice(safe_pool, size=needed, replace=False).tolist()
+        uretilecek_termler = adaylar.loc[~gecerli, "term_id"].to_numpy()
 
-        # Seçilen negatifler için label=0 ata
-        for item_id in chosen:
-            negatives.append({
-                "term_id": term_id,
-                "item_id": item_id,
-                "label": 0,
-            })
-
-        # Her 1000 sorguda bir ilerleme bilgisi yazdır
-        if verbose and (i + 1) % 1000 == 0:
-            print(f"  [negative_sampling] {i + 1}/{total_terms} sorgu islendi...")
-
+    negatives = pd.concat(kabul_edilenler, ignore_index=True)
+    assert len(negatives) == hedef, "Uretilen negatif sayisi beklenenden farkli!"
+    negatives["label"] = 0
 
     if verbose:
         print(f"  [negative_sampling] Toplam {len(negatives):,} negatif ornek uretildi.")
 
-    return pd.DataFrame(negatives, columns=["term_id", "item_id", "label"])
+    return negatives[["term_id", "item_id", "label"]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

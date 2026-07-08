@@ -1,9 +1,27 @@
-# Negatif kalite kontrolü — Gün 4 görevi (Mert)
-# Amaç: 03'ün ürettiği train_random*.parquet dosyalarını BAĞIMSIZ olarak
-# doğrulamak. Üretim kodunun kendi assert'lerine güvenmiyoruz; dosyaları
-# diskten açıp ham veriyle sıfırdan karşılaştırıyoruz.
-#
-# Çalıştırma:  python notebooks/04_negatif_kalite_mert.py
+"""
+notebooks/03_negatif_kalite_mert.py
+====================================
+G.G.A Takımı — Negatif Kalite Kontrolü (Gün 4 görevi)
+
+Mustafa Mert Çevik tarafından hazırlanmıştır. (4 Temmuz görevi)
+
+Neden bağımsız bir doğrulama gerekiyor?
+  02'nin ürettiği negatif örnekler, kendi assert'lerine güvenilerek
+  doğru kabul edilemez — üretim kodundaki bir hata kendi kontrolünü de
+  yanıltabilir. Bu yüzden train_random*.parquet dosyaları diskten
+  açılıp ham veriyle (training_pairs.csv, items.csv) sıfırdan,
+  bağımsız olarak karşılaştırılır.
+
+Bu script şunları kontrol eder:
+  N1. Hiçbir negatif gerçek bir pozitifle çakışmıyor
+  N2. Negatifler kendi içinde tekrarsız
+  N3. Satır sayıları beklenen orana uyuyor (oran x pozitif sayısı)
+  N4. Oran her term bazında da korunmuş (sadece toplamda değil)
+  N5. Negatiflerdeki tüm id'ler gerçek (katalogda/pozitiflerde var)
+  N6. Pozitifler dosyaya kayıpsız/bozulmasız girmiş
+
+Çalıştırma:  python notebooks/03_negatif_kalite_mert.py
+"""
 
 from pathlib import Path
 
@@ -85,7 +103,7 @@ for oran in ORANLAR:
     hepsi_gecti &= all(sonuclar)
 
     # İçerik parmak izi: satırların İÇERİĞİNDEN üretilen özet sayı.
-    # 03'ü aynı seed'le tekrar çalıştırıp bunu yeniden yazdırırsan aynı
+    # 02'yi aynı seed'le tekrar çalıştırıp bunu yeniden yazdırırsan aynı
     # sayı çıkmalı → tekrar üretilebilirliğin kanıtı. Rapora yazılacak.
     parmak_izi = pd.util.hash_pandas_object(df, index=False).sum()
     print(f"  içerik parmak izi: {parmak_izi}")

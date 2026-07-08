@@ -100,10 +100,13 @@ def merge_pairs(pairs_path, terms_df, items_df, is_train=True):
     
     # Adım 1: training_pairs içindeki 'term_id' ile terms.csv içindeki 'term_id'yi eşleştir.
     # 'left' merge: training_pairs'deki tüm satırları koru, terms_df'den eşleşenleri yanına ekle.
-    merged = pd.merge(pairs_df, terms_df, on='term_id', how='left')
-    
+    # validate='many_to_one': pairs'te bir term_id çok kez geçebilir ama terms_df'de
+    # TEK olmalı. terms_df'de tekrar varsa (satır patlaması riski) sessizce geçmek
+    # yerine burada hata fırlatılır.
+    merged = pd.merge(pairs_df, terms_df, on='term_id', how='left', validate='many_to_one')
+
     # Adım 2: Aynı işlemi ürünler için yap. 'item_id' kolonunu kullanarak ürün detaylarını yanına çek.
-    merged = pd.merge(merged, items_df, on='item_id', how='left')
+    merged = pd.merge(merged, items_df, on='item_id', how='left', validate='many_to_one')
     
     # Geriye tüm bilgilerin (query, title, brand, category, label) yan yana olduğu tablo döner
     return merged

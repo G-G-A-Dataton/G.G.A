@@ -3,7 +3,7 @@ run_baseline.py
 ===============
 G.G.A Takımı — LightGBM Baseline v0 Çalıştırıcı
 
-Bu script notebooks/02_baseline_lgbm_omerfaruk.ipynb ile aynı pipeline'ı
+Bu script notebooks/04_baseline_lgbm_omerfaruk.ipynb ile aynı pipeline'ı
 terminal üzerinden çalıştırmak için yazılmıştır.
 
 Çalıştırmak için:

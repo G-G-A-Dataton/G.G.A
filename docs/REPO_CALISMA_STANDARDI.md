@@ -16,8 +16,7 @@ G.G.A/
 │   ├── REPO_CALISMA_STANDARDI.md
 │   └── EDA_notlari_v0.md
 ├── notebooks/               # Geliştirme, veri analizi ve deneme notebook'ları
-│   ├── 01_merge_and_test_mustafa.ipynb
-│   └── ...                  # Diğer notebook'lar [Sıra No]_[Açıklama]_[Yazar].ipynb
+│   └── ...                  # [Sıra No]_[Açıklama]_[Yazar].ipynb formatında
 ├── src/                     # Tekrar kullanılabilir Python scriptleri
 │   ├── __init__.py
 │   ├── data.py              # Veri okuma, merge ve veri tipi optimizasyonu
@@ -36,7 +35,7 @@ Tüm Jupyter Notebook dosyaları aşağıdaki formata uygun olarak adlandırıla
 Format: `[SIRA_NO]_[GÖREV_ADI]_[ADINIZ].ipynb`
 
 Örnekler:
-*   `01_merge_and_test_mustafa.ipynb`
+*   `01_eda_ahmet.ipynb`
 *   `02_baseline_lgbm_omer.ipynb`
 *   `03_tfidf_features_muhammed.ipynb`
 
