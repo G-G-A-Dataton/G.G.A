@@ -219,3 +219,6 @@ __marimo__/
 
 # artifacts
 artifacts/
+
+# outputs (deney kiyas ciktilari, hard negative dosyalari vb.)
+outputs/
