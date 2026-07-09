@@ -24,6 +24,7 @@ Her submission veya önemli local validation sonucu buraya eklenir.
 | EXP-004 | 6 Tem | Ahmet Emin | LightGBM | Random 3:1 / 3K poz | 12 (10 + L2/L3/depth) | TBD | — | Kategori seviye feature'ları eklendi |
 | EXP-005 | 7 Tem | Ömer Faruk | LightGBM | Random 3:1 / 3K poz | 12 temel | **0.9622 ± 0.0022** | — | Hard neg. baseline (BM25 bekleniyor), thresh=0.4 → 0.9625 |
 | EXP-006 | 8 Tem | Ömer Faruk | LightGBM | BM25 Hard 3:1 / 5K sorgu | 15 (12+TF-IDF+attrübüt) | ⏳ Çalıştırılacak | — | `notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` ile üret |
+| EXP-007 | 9 Tem | Ömer Faruk | LightGBM | Mix(BM25+Rand) 3:1 / 250K poz | 16 (15+tfidf) | ⏳ Çalıştırılacak | — | `run_train_full_v2.py` → tam model, submission hazır |
 
 ---
 
