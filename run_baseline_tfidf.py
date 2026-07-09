@@ -4,11 +4,18 @@ run_baseline_tfidf.py
 G.G.A Takımı — TF-IDF Eklenmiş LightGBM Baseline (4 Temmuz Görevi)
 
 Muhammed Köseoğlu tarafından hazırlanmıştır.
+8 Temmuz güncelleme: TF-IDF hiperparametreleri 6 Temmuz deney sonucuna göre güncellendi.
+  Önceki: max_features=30_000, ngram_range=(1, 2)   [separation: 0.34]
+  Yeni   : max_features=10_000, ngram_range=(1, 1)   [separation: 0.45 — %32 iyileşme]
+  Kaynak : docs/tfidf_deney_tablosu.md — 27 kombinasyon özerine deney
 
 Bu script, src/tfidf_features.py modülündeki TF-IDF cosine similarity
 feature'ını baseline pipeline'a bağlar ve modele ek olarak verir.
 
-Çalıştırmak için:
+Ayrıca 8 Temmuz'da eklenen attributes feature'ları (renk, beden, materyal) da
+pipeline'a dahildir (src/features.py üzerinden otomatik gelir).
+
+Arşıltırmak için:
   python run_baseline_tfidf.py
 """
 
@@ -41,7 +48,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ─── 1. Veri Yükleme ──────────────────────────────────────────────────────
 print("=" * 60)
-print("  G.G.A — LightGBM + TF-IDF Baseline (4 Temmuz)")
+print("  G.G.A — LightGBM + TF-IDF Baseline (4 Temmuz / 8 Tem. güncelleme)")
 print("=" * 60)
 
 print("\n[1/7] Veriler yukleniyor...")
@@ -74,8 +81,10 @@ merged = build_features(merged)
 # ─── 5. TF-IDF Cosine Feature Ekleme ─────────────────────────────────────
 print("\n[5/7] TF-IDF Cosine feature ekleniyor...")
 # Vectorizer eğit (tüm sorgu + ürün metinleri üzerinde)
+# 6 Temmuz deneyi: 10K unigram, separation=0.4464 (en iyi 27 kombinasyondan)
+# Önceki: max_features=30_000, ngram_range=(1,2), separation=0.34 — değiştirildi!
 vectorizer = build_tfidf_vectorizer(
-    terms_df, items_df, max_features=30_000, ngram_range=(1, 2)
+    terms_df, items_df, max_features=10_000, ngram_range=(1, 1)
 )
 # Kaydedelim — bir daha eğitmek zorunda kalmayalım
 vec_path = os.path.join(OUTPUT_DIR, "tfidf_vectorizer.pkl")
@@ -167,11 +176,12 @@ for _, row in feat_imp.iterrows():
     bar = "#" * int(row["importance"] / max_imp * 30)
     print(f"  {row['feature']:<28} {bar} ({row['importance']:.1f})")
 
-# ─── Sonuç Özeti ──────────────────────────────────────────────────────────
+# ─── Sonuç Özeti ────────────────────────────────────────────────────────────
 print("\n" + "=" * 60)
-print("  TFIDF BASELINE SONUC OZETI (4 Temmuz)")
+print("  TFIDF BASELINE SONUC OZETI (4 Temmuz / 8 Tem. güncelleme)")
 print("=" * 60)
 print(f"  Feature sayisi    : {len(feature_cols_tfidf)} (onceki: {len(FEATURE_COLS)})")
+print(f"  TF-IDF konfig     : max_features=10_000, ngram=(1,1)  [6 Tem. deney sonucu]")
 print(f"  Ort. Macro-F1     : {mean_f1:.4f} +/- {std_f1:.4f}")
 print(f"  En iyi threshold  : {best_thresh}")
 print(f"  Optimized F1      : {best_score:.4f}")

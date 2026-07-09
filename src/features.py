@@ -6,6 +6,8 @@ G.G.A Takımı — Feature Engineering (Özellik Mühendisliği) Modülü
 Ahmet Emin Işın tarafından hazırlanmıştır.
 3 Temmuz: Temel overlap ve cinsiyet feature'ları
 4 Temmuz: Yaş grubu uyumu ve demografik çelişki skoru eklendi
+6 Temmuz: Kategori seviye feature'ları (L2/L3/depth)
+8 Temmuz: Attributes feature'ları eklendi (renk, beden, materyal)
 
 Bu modül, her (sorgu, ürün) çifti için modelin öğrenebileceği sayısal
 özellikler (feature) üretir. Metin karşılaştırmalarına dayalı basit ama
@@ -27,10 +29,16 @@ güçlü overlap (örtüşme) yöntemleri kullanır.
   - gender_match           : Sorgu ile ürün cinsiyeti uyumlu mu? (1=uyumlu, -1=çelişki, 0=belirsiz)
   - age_group_match        : Sorguda yaş grubu sinyali var mı ve ürünle uyuşuyor mu?
   - demographic_conflict   : Cinsiyet veya yaş grubu çelişkisi var mı? (0/1 binary)
+  --- Attributes Feature'ları (8 Temmuz) ---
+  - query_color_match      : Sorgudaki renk bilgisi ürünün rengiyle uyuşuyor mu? (-1/0/1)
+  - query_size_match       : Sorgudaki beden/numara bilgisi ürünün bedeniyle uyuşuyor mu? (-1/0/1)
+  - query_material_match   : Sorgudaki materyal bilgisi ürünün materyaliyle uyuşuyor mu? (-1/0/1)
 """
 
 import pandas as pd
 import numpy as np
+
+from src.attributes import add_attribute_features, ATTRIBUTE_FEATURE_COLS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -418,6 +426,14 @@ def build_features(df):
     # apply() yerine .apply(func) kullanıyoruz — satır değil kolon başına fonksiyon
     out["cat_depth"] = out["category"].apply(compute_cat_depth)
 
+    # ── 8 Temmuz: Attributes Feature'ları ────────────────────────────────────
+    # items.csv'deki 'attributes' kolonu renk, beden, materyal gibi yapısal bilgiler içerir.
+    # Bu bilgiler title'da yer almayabilir ama sorguda geçiyor olabilir.
+    # Sprint 1 raporunda tespit edilmişti: kısa title'lar (örn. "530") TF-IDF için anlamsız.
+    # Attributes bu boşluğu kapatır: "siyah 42 deri ayakkabı" sorgusunda tüm üç feature çalışır.
+    print("[features] Attributes feature'ları (renk, beden, materyal) hesaplanıyor...")
+    out = add_attribute_features(out)
+
     print("[features] Tum feature'lar hesaplandi.")
     return out
 
@@ -440,6 +456,8 @@ FEATURE_COLS = [
     "query_cat_l2_overlap",
     "query_cat_l3_overlap",
     "cat_depth",
+    # Attributes feature'ları (8 Temmuz)
+    *ATTRIBUTE_FEATURE_COLS,  # query_color_match, query_size_match, query_material_match
 ]
 
 

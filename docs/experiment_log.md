@@ -23,6 +23,7 @@ Her submission veya önemli local validation sonucu buraya eklenir.
 | EXP-003 | 4 Tem | Muhammed | LightGBM | Random 3:1 / 5K poz | 10 (9 + TF-IDF) | **0.9699 ± 0.0028** | — | TF-IDF #1 importance, +0.0086 kazanım |
 | EXP-004 | 6 Tem | Ahmet Emin | LightGBM | Random 3:1 / 3K poz | 12 (10 + L2/L3/depth) | TBD | — | Kategori seviye feature'ları eklendi |
 | EXP-005 | 7 Tem | Ömer Faruk | LightGBM | Random 3:1 / 3K poz | 12 temel | **0.9622 ± 0.0022** | — | Hard neg. baseline (BM25 bekleniyor), thresh=0.4 → 0.9625 |
+| EXP-006 | 8 Tem | Ömer Faruk | LightGBM | BM25 Hard 3:1 / 5K sorgu | 15 (12+TF-IDF+attrübüt) | ⏳ Çalıştırılacak | — | `notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` ile üret |
 
 ---
 
@@ -82,7 +83,9 @@ query_cat_l1_overlap       (1,608)
 
 ### EXP-002 — Demografik Feature Seti (4 Temmuz)
 
-> ⏳ Çalıştırıldıktan sonra doldurulacak
+> ⚠️ Code commit’de var (`src/features.py` satır 388-397), manuel CV sonucu
+> kaydedilmemis. EXP-003 ile birlikte çalıştırılmıştı; TF-IDF (EXP-003) bastığı icin
+> ayrı skor algılanmadı. Sonraki tam modelde feature importance'a bakılacak.
 
 **Değişiklik:** `src/features.py`'ye `age_group_match` ve `demographic_conflict` eklendi.
 
@@ -97,9 +100,10 @@ query_cat_l1_overlap       (1,608)
 
 ### EXP-003 — TF-IDF Cosine Feature (4 Temmuz)
 
-> ⏳ Çalıştırıldıktan sonra doldurulacak
+> ⚠️ Code commit'de sonucu kayitli (experiment_log satiri: 0.9699 ± 0.0028)
+> EXP-002 ile birlikte ayni run'da mi yoksa ayri mi calistirildi netlestirilmeli.
 
-**Değişiklik:** `src/tfidf_features.py` baseline pipeline'a bağlandı.
+**Değişiklik:** `src/tfidf_features.py` baseline pipeline'a bağlandi.
 
 | Parametre | EXP-001 | EXP-003 |
 |---|---|---|
@@ -116,3 +120,21 @@ query_cat_l1_overlap       (1,608)
 - Tüm deneyler `seed=42` ile tekrar üretilebilir
 - Local CV skoru Kaggle LB ile uyuşmayabilir — LB skoru her zaman not alınmalı
 - **EXP-001 best threshold: 0.45** — submission'larda bu kullanılacak
+- **EXP-003 best TF-IDF konfig: `ngram=(1,1), max_features=10_000`** — `run_baseline_tfidf.py` 8 Temmuz'da güncellendi
+- **EXP-006** — `notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` çalıştırılınca tablo güncellenecek
+
+---
+
+## EXP-006 Detayı (8 Temmuz)
+
+**Amaç:** BM25 hard negative'in random negative'den daha iyi mi olduğunu ölçmek.
+
+| Parametre | Değer |
+|---|---|
+| Script | `notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` |
+| BM25 top_n | 50 |
+| Negatif oran | 3:1 |
+| Örnek sorgu sayısı | 5.000 benzersiz sorgu |
+| Feature seti | 15 (12 temel + TF-IDF + attributes) |
+
+> **➡️ Sonucu** `python notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` çalıştırınca `outputs/hard_neg_comparison.csv`'ye yazılır.
