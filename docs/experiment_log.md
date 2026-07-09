@@ -25,6 +25,9 @@ Her submission veya önemli local validation sonucu buraya eklenir.
 | EXP-005 | 7 Tem | Ömer Faruk | LightGBM | Random 3:1 / 3K poz | 12 temel | **0.9622 ± 0.0022** | — | Hard neg. baseline (BM25 bekleniyor), thresh=0.4 → 0.9625 |
 | EXP-006 | 8 Tem | Ömer Faruk | LightGBM | BM25 Hard 3:1 / 5K sorgu | 15 (12+TF-IDF+attrübüt) | ⏳ Çalıştırılacak | — | `notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` ile üret |
 | EXP-007 | 9 Tem | Ömer Faruk | LightGBM | Mix(BM25+Rand) 3:1 / 250K poz | 16 (15+tfidf) | ⏳ Çalıştırılacak | — | `run_train_full_v2.py` → tam model, submission hazır |
+| EXP-008 | 8 Tem | Ömer Faruk | LightGBM | Random 3:1 / 2K poz | 15 (12+attributes) | **0.9615 ± 0.0039** | — | Grid search: num_leaves=31, lr=0.05, min_child=20 → F1: 0.9631 |
+| EXP-009 | 9 Tem | Ömer Faruk | LGBM vs XGB | Random 3:1 / 3K poz | 15 (12+attributes) | **LGBM: 0.9605 / XGB: 0.9597** | — | LGBM is faster and slightly higher F1 (0.9613 vs 0.9597) |
+
 
 ---
 
