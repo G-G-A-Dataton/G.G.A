@@ -37,35 +37,75 @@ Bir kullanıcının arama terimi (query) ile bir ürün (item) arasında **alaka
 
 ```
 G.G.A/
-├── datasets/                # Yarışma veri setleri (Git LFS)
+├── datasets/                    # Yarışma veri setleri (Git LFS)
 │   ├── items.csv
 │   ├── terms.csv
 │   ├── training_pairs.csv
 │   ├── submission_pairs.csv
-│   └── sample_submission.csv
-├── docs/                    # Dokümantasyon
-│   ├── Rehber.md            # Sıfırdan başlayanlar için tam rehber
-│   ├── EDA_notlari_v0.md    # İlk veri analizi ve veri sözlüğü
-│   ├── EDA_on_raporu.md     # Kategori, marka dağılımları ve 50 pozitif çift analizi
-│   ├── REPO_CALISMA_STANDARDI.md # Ekip çalışma ve Git yönergeleri
-│   └── yarışma/             # Resmi yarışma belgeleri
-├── notebooks/               # Jupyter Notebooklar (Deneyler)
-│   ├── 01_veri_kalite_mert.py        # Veri kalite kontrolü (K1-K6)
-│   ├── 02_negative_sampling_mert.py  # Random negative üretimi (1:1/3:1/5:1)
-│   ├── 03_negatif_kalite_mert.py     # Negatif örneklerin bağımsız doğrulaması
-│   └── 04_baseline_lgbm_omerfaruk.ipynb # Baseline LightGBM modeli eğitim süreci
-├── src/                     # Üretim (Production) Kodları
-│   ├── __init__.py
-│   ├── data.py              # Bellek dostu veri yükleme ve merge pipeline'ı
-│   ├── features.py          # Kelime örtüşmesi ve cinsiyet uyumu feature'ları
-│   ├── metrics.py           # Macro-F1 ve 5-Fold Stratified K-Fold validation şeması
-│   ├── negative_sampling.py # Sızıntı korumalı rastgele negatif örnek üretici
-│   ├── tfidf_features.py    # TF-IDF cosine similarity feature üretimi
-│   └── validate_submission.py # Kaggle submission format doğrulaması
-├── verify_pipeline.py       # Veri yükleme doğrulama scripti
-├── run_baseline.py          # LightGBM baseline model çalıştırma scripti
-├── .gitignore
-├── LICENSE
+│   └── neg_ratio/               # Negatif oran deney setleri (1:1, 2:1, 3:1, 5:1)
+├── src/                         # Üretim (Production) modülleri
+│   ├── data.py                  # Bellek dostu veri yükleme
+│   ├── features.py              # 15 feature üretimi (metin, demografik, kategori, attr)
+│   ├── metrics.py               # Macro-F1, threshold tarama, Stratified K-Fold
+│   ├── negative_sampling.py     # Random & BM25 hard negative üretimi
+│   ├── bm25_hard_negative.py    # BM25 hard negative örnekleyici
+│   ├── attributes.py            # Renk/beden/materyal attribute parse
+│   ├── tfidf_features.py        # TF-IDF cosine similarity feature
+│   ├── item_text.py             # Embedding için item metin standardizasyonu
+│   ├── embedding_batch.py       # Toplu embedding üretimi (chunk + checkpoint)
+│   ├── embedding_cosine.py      # Query-item cosine similarity feature + cache
+│   ├── embedding_poc.py         # Embedding PoC (küçük batch test)
+│   ├── neg_ratio_datasets.py    # 1:1/2:1/3:1/5:1 veri seti üretici
+│   ├── data_pipeline.py         # Parametreli uçtan uca veri pipeline
+│   ├── train_mix_v2.py          # Random+BM25 karışık eğitim seti (v2)
+│   ├── submission.py            # Submission üretim araçları
+│   ├── validate_submission.py   # Submission format doğrulayıcı
+│   └── error_analysis.py        # FP/FN hata analizi
+├── scripts/                     # Çalıştırılabilir scriptler
+│   ├── training/                # Model eğitimi
+│   │   ├── run_baseline.py          # LightGBM baseline (5-Fold CV)
+│   │   ├── run_baseline_tfidf.py    # TF-IDF özellikli baseline
+│   │   ├── run_lgbm_tuning.py       # Parametre tuning (EXP-008)
+│   │   ├── run_model_comparison.py  # LGBM vs XGBoost (EXP-009)
+│   │   └── run_train_full_v2.py     # Tam eğitim seti ile eğitim
+│   ├── analysis/                # Analiz & deney
+│   │   ├── run_feature_importance.py    # Feature importance (5-Fold gain)
+│   │   ├── run_threshold_analysis.py    # Optimal threshold taraması
+│   │   ├── run_deney_matrisi_v2.py      # 4x4 oran × feature seti deneyi
+│   │   ├── run_ensemble_comparison.py   # LGBM + XGB ensemble karşılaştırma
+│   │   └── run_hata_taksonomisi.py      # FP/FN hata sınıflandırma
+│   ├── embedding/               # Embedding üretimi
+│   │   ├── run_term_embeddings.py           # Term embedding üretim runner
+│   │   └── run_embedding_score_comparison.py # Embedding cosine feature etkisi
+│   ├── submission/              # Submission
+│   │   ├── run_full_submission_v2.py    # Tam submission dosyası üretimi
+│   │   ├── run_submission_qa.py         # Submission QA kontrolü
+│   │   └── run_submission_feature_dryrun.py # Feature pipeline dry-run
+│   └── data/                    # Veri hazırlama & kalite
+│       ├── run_data_qa_report.py        # 8 kalite kontrolü raporu
+│       ├── run_hard_neg_comparison.py   # Hard vs random negative karşılaştırma
+│       ├── run_tfidf_experiments.py     # TF-IDF parametre deneyleri
+│       └── verify_pipeline.py           # Pipeline doğrulama
+├── docs/                        # Dokümantasyon & raporlar
+│   ├── experiment_log.md            # Tüm deney geçmişi (EXP-001 → EXP-009)
+│   ├── feature_importance_raporu.md # Feature önem analizi (10 Temmuz)
+│   ├── threshold_analizi.md         # Optimal threshold raporu (11 Temmuz)
+│   ├── deney_matrisi_v2.md          # Oran × feature deney matrisi (11 Temmuz)
+│   ├── ensemble_karsilastirma.md    # Ensemble sonuçları (13 Temmuz)
+│   ├── hata_taksonomisi.md          # FP/FN sınıflandırma (12 Temmuz)
+│   ├── embedding_skor_kiyasi.md     # Embedding cosine etkisi (12 Temmuz)
+│   ├── teknik_rapor_v1.md           # EDA & feature bulguları (10 Temmuz)
+│   ├── rapor_yontem_v1.md           # Yöntem bölümü (13 Temmuz)
+│   ├── data_qa_raporu.md            # Veri kalite raporu (12 Temmuz)
+│   ├── offline_dependency.md        # Offline hazırlık rehberi (13 Temmuz)
+│   ├── sprint1_raporu.md            # Sprint 1 özeti
+│   ├── sprint2_raporu.md            # Sprint 2 özeti
+│   └── yarışma/                     # Resmi yarışma belgeleri
+├── outputs/                     # Model çıktıları & embedding dosyaları
+│   ├── embeddings/              # term_embeddings.npy, item_embeddings.npy
+│   └── *.csv                    # Deney sonuç tabloları
+├── notebooks/                   # Jupyter Notebooklar
+├── requirements.txt
 └── README.md
 ```
 
@@ -73,27 +113,69 @@ G.G.A/
 
 ## 🛠️ Nasıl Çalıştırılır?
 
-Projenin veri yükleme hattını veya baseline model eğitimini yerel bilgisayarınızda çalıştırmak için aşağıdaki adımları takip edebilirsiniz.
+> **Not:** Tüm komutları proje kök dizininden çalıştırın:
+> ```bash
+> cd G.G.A
+> ```
 
-### 1. Veri Yükleme Hattını Test Etme
-Bellek optimizasyonlu veri yükleme ve birleştirme (merge) aşamasını test etmek için:
+### Temel Akış (Hızlı Başlangıç)
+
 ```bash
-python verify_pipeline.py
+# 1. Veri pipeline doğrula
+python scripts/data/verify_pipeline.py
+
+# 2. Baseline model eğit
+python scripts/training/run_baseline.py
+
+# 3. Submission dosyası üret
+python scripts/training/run_train_full_v2.py
+python scripts/submission/run_full_submission_v2.py
 ```
 
-### 2. LightGBM Baseline Modelini Çalıştırma
-5-Fold Çapraz Doğrulama (Cross-Validation) ile 20.000 satırlık örnek veri üzerinde LightGBM baseline eğitimini başlatmak, threshold optimizasyonu yapmak ve feature importance değerlerini görmek için:
+### Analiz Scriptleri
+
 ```bash
-python run_baseline.py
+# Feature önemi (hangi feature ne kadar önemli?)
+python scripts/analysis/run_feature_importance.py
+
+# Optimal threshold taraması
+python scripts/analysis/run_threshold_analysis.py
+
+# Negatif oran × feature kombinasyon deneyi (4×4 grid)
+python scripts/analysis/run_deney_matrisi_v2.py
+
+# LGBM vs XGBoost vs Ensemble
+python scripts/analysis/run_ensemble_comparison.py
+
+# Hatalı tahminlerin sınıflandırılması
+python scripts/analysis/run_hata_taksonomisi.py
 ```
 
-### 3. Notebook Üzerinden Adım Adım İnceleme
-Görsel sonuçları ve eğitim detaylarını Jupyter Notebook üzerinden izlemek için:
+### Embedding Scriptleri
+
 ```bash
-jupyter notebook
-# Tarayıcıda notebooks/04_baseline_lgbm_omerfaruk.ipynb dosyasını açıp çalıştırın.
+# Term (sorgu) embeddinglerini üret
+python scripts/embedding/run_term_embeddings.py
+
+# Item embeddinglerini üret (~963K ürün)
+python src/embedding_batch.py --target items
+
+# Embedding cosine feature etkisini ölç
+python scripts/embedding/run_embedding_score_comparison.py
 ```
 
+### Veri & Kalite
+
+```bash
+# Veri kalite kontrolü (8 kontrol)
+python scripts/data/run_data_qa_report.py
+
+# Submission feature dry-run (10K satır test)
+python scripts/submission/run_submission_feature_dryrun.py
+
+# Tam submission dry-run (~3.36M satır)
+python scripts/submission/run_submission_feature_dryrun.py --full
+```
 
 ---
 
