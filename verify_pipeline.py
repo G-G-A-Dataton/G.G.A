@@ -10,15 +10,15 @@ fonksiyonlarının doğru çalışıp çalışmadığını hızlıca test etmek 
 import sys
 import os
 
-# src klasöründeki modülleri (data.py gibi) içe aktarabilmek için 
-# projenin ana klasörünü (G.G.A) Python'un arama yollarına (path) ekliyoruz.
-sys.path.append(os.path.abspath(r"c:\Users\ÖMER FARUK\Desktop\Dosyalar\Trendyol Teknofest\G.G.A"))
+# Proje kök dizinini Python yoluna ekle.
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, PROJECT_ROOT)
 
 import pandas as pd
 from src.data import load_terms, load_items, merge_pairs
 
-# Veri setlerinin bulunduğu klasörün yolu
-data_dir = r"c:\Users\ÖMER FARUK\Desktop\Dosyalar\Trendyol Teknofest\G.G.A\datasets"
+# Veri setlerinin bulunduğu klasörün yolu.
+data_dir = os.path.join(PROJECT_ROOT, "datasets")
 terms_path = os.path.join(data_dir, "terms.csv")
 items_path = os.path.join(data_dir, "items.csv")
 train_pairs_path = os.path.join(data_dir, "training_pairs.csv")
