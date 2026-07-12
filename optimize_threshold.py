@@ -28,7 +28,7 @@ from sklearn.metrics import f1_score
 warnings.filterwarnings("ignore")
 
 # Proje kök dizinini sys.path'e ekle
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.validate_submission import validate_submission
