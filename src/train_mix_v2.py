@@ -191,14 +191,14 @@ def build_mixed_training_set(
         bm25_pct = n_bm25 / n_neg * 100 if n_neg else 0
         rand_pct = n_rand / n_neg * 100 if n_neg else 0
 
-        print(f"\n  {'─'*50}")
+        print(f"\n  {'-'*50}")
         print(f"  TRAIN_MIX_V2 SONUCU:")
         print(f"  Pozitif          : {n_pos:>8,}")
         print(f"  BM25 negatif     : {n_bm25:>8,}  ({bm25_pct:.1f}%)")
         print(f"  Random negatif   : {n_rand:>8,}  ({rand_pct:.1f}%)")
         print(f"  TOPLAM           : {len(full_df):>8,}")
         print(f"  Pozitif oran     : {n_pos/len(full_df):.2%}")
-        print(f"  {'─'*50}")
+        print(f"  {'-'*50}")
 
     return full_df
 
