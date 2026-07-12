@@ -1,16 +1,21 @@
-# Ensemble Aday Karsilastirma Tablosu (13 Temmuz)
+# Ensemble Ağırlıklandırma & Optimizasyon Raporu (15 Temmuz)
 
 **Hazırlayan:** Ömer Faruk Kara  
-**Tarih:** 13 Temmuz 2026
+**Tarih:** 15 Temmuz 2026  
 
----
+## 1. Optimizasyon Sonuçları
 
-| Model | F1 (0.5) | Best F1 | Threshold | Sure |
-|---|---|---|---|---|
-| LGBM_BASE | 0.9628 | 0.9632 | 0.45 | 6.4s |
-| **LGBM_TUNED** | 0.9628 | **0.9637** | 0.45 | 11.3s |
-| XGB_BASE | 0.9624 | 0.9624 | 0.4 | 4.8s |
-| ENS_LGBM_XGB | 0.9625 | 0.963 | 0.55 | 4.8s |
+| Metrik / Parametre | Değer |
+|---|---|
+| LightGBM Ağırlığı | 0.3875 |
+| XGBoost Ağırlığı | 0.6125 |
+| Karar Eşiği (Threshold) | 0.7142 |
+| **En İyi Macro-F1** | **0.7198** |
 
-**En iyi aday:** `LGBM_TUNED`  
-*CSV: `outputs/ensemble_karsilastirma.csv`*
+## 2. Karşılaştırma
+
+- LightGBM Tekil (0.50): `0.6456`
+- XGBoost Tekil (0.50): `0.6521`
+- **Weighted Ensemble (Optimized): `0.7198`**
+
+Ensemble ve threshold ortak optimizasyonu sayesinde **+0.0678** F1 artışı sağlanmıştır.
