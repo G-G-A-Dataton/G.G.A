@@ -34,6 +34,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.validate_submission import validate_submission
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
 SUB_OUTPUT = os.path.join(OUTPUT_DIR, "submission_v2.csv")
 
 
