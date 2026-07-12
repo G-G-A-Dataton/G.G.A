@@ -236,12 +236,13 @@ def generate_bm25_hard_negatives(
         pos_items = pos_by_term.get(term_id, set())
 
         added = 0
+        term_target = ratio.get(term_id, ratio) if isinstance(ratio, (dict, pd.Series)) else ratio
         for item_id in index.top_n(query, n=top_n):
             if item_id in pos_items:
                 continue
             negatives.append((term_id, item_id))
             added += 1
-            if added >= ratio:
+            if added >= term_target:
                 break
 
         if verbose and (i + 1) % 5_000 == 0:
@@ -253,17 +254,14 @@ def generate_bm25_hard_negatives(
 
     if verbose:
         avg_found = len(negatives_df) / len(unique_terms) if len(unique_terms) else 0.0
-        # reindex: hic hard negative uretilemeyen (0 satirlik) terimler
-        # groupby sonucunda hic gorunmez, reindex ile bunlari da 0 olarak
-        # sayima katiyoruz (bkz. notebooks/03_negatif_kalite_mert.py'deki
-        # ayni desen).
         term_counts = (
             negatives_df.groupby("term_id").size().reindex(unique_terms, fill_value=0)
             if len(negatives_df) else pd.Series(0, index=unique_terms)
         )
-        eksik = (term_counts < ratio).sum()
+        hedef_series = ratio if isinstance(ratio, pd.Series) else pd.Series(ratio, index=unique_terms)
+        eksik = (term_counts < hedef_series).sum()
         print(f"[bm25_hard_negative] Toplam {len(negatives_df):,} hard negative uretildi "
-              f"(sorgu basina ort. {avg_found:.2f} / hedef {ratio}).")
+              f"(sorgu basina ort. {avg_found:.2f}).")
         print(f"[bm25_hard_negative] Hedefin altinda kalan sorgu sayisi: {eksik:,} "
               f"(top_n adaylari arasinda yeterli pozitif-olmayan bulunamadi).")
 

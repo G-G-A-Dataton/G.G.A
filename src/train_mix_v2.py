@@ -83,6 +83,9 @@ def build_mixed_training_set(
         print("=" * 60)
         print(f"  Pozitif çift: {len(train_df):,} | Ratio: {ratio}:1")
         print(f"  Hedef toplam: {len(train_df) * (ratio + 1):,}")
+    all_terms = train_df["term_id"].unique()
+    pos_counts = train_df.groupby("term_id").size().reindex(all_terms, fill_value=0)
+    hedef_per_term = pos_counts * ratio
 
     # ─── 1. BM25 Hard Negative Üret ──────────────────────────────────────────
     if verbose:
@@ -92,22 +95,17 @@ def build_mixed_training_set(
         terms_df=terms_df,
         items_df=items_df,
         top_n=bm25_top_n,
-        ratio=ratio,
+        ratio=hedef_per_term,
         max_df_ratio=bm25_max_df_ratio,
         verbose=verbose,
     )
 
     # ─── 2. Eksikleri Hesapla ─────────────────────────────────────────────────
     # Her term_id için kaç BM25 negatif üretilebildi?
-    bm25_counts = bm25_neg.groupby("term_id").size()
-
-    # Tüm benzersiz term'lar için hedef (ratio adet negatif)
-    all_terms = train_df["term_id"].unique()
-    hedef_per_term = pd.Series(ratio, index=all_terms)
+    bm25_counts = bm25_neg.groupby("term_id").size().reindex(all_terms, fill_value=0)
 
     # Eksik: hedef - gerçekleşen (negatif olursa 0'a sabitlenir)
-    gerceklesen = bm25_counts.reindex(all_terms, fill_value=0)
-    eksik = (hedef_per_term - gerceklesen).clip(lower=0)
+    eksik = (hedef_per_term - bm25_counts).clip(lower=0)
 
     n_eksik_term = (eksik > 0).sum()
     n_eksik_neg  = int(eksik.sum())
