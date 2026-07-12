@@ -139,15 +139,15 @@ def main():
     # 3. Final Aday Tahminleri Üret
     print("\n[3/4] En iyi parametrelerle test tahminleri birlestiriliyor...")
     test_prob_blend = best_w_lgbm * test_lgbm + best_w_xgb * test_xgb
-    sub_df["label"] = (test_prob_blend >= best_threshold).astype(int)
+    sub_df["prediction"] = (test_prob_blend >= best_threshold).astype(int)
 
     # 4. Submission Kaydet & QA Kontrol
     print("\n[4/4] Submission CSV dosyası olusturuluyor...")
-    sub_df[["id", "label"]].to_csv(SUB_OUTPUT, index=False)
+    sub_df[["id", "prediction"]].to_csv(SUB_OUTPUT, index=False)
     print(f"  Kaydedildi: {SUB_OUTPUT}")
 
     # Basit QA kontrolü yap
-    validate_submission(sub_df, sub_df)  # validate_submission standardına göre doğrula
+    validate_submission(SUB_OUTPUT, os.path.join(DATA_DIR, "submission_pairs.csv"))
 
     # Rapor yazdır
     report_path = os.path.join(PROJECT_ROOT, "docs", "ensemble_karsilastirma.md")
