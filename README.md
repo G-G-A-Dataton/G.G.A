@@ -41,8 +41,7 @@ G.G.A/
 │   ├── items.csv
 │   ├── terms.csv
 │   ├── training_pairs.csv
-│   ├── submission_pairs.csv
-│   └── neg_ratio/               # Negatif oran deney setleri (1:1, 2:1, 3:1, 5:1)
+│   └── submission_pairs.csv
 ├── src/                         # Üretim (Production) modülleri
 │   ├── data.py                  # Bellek dostu veri yükleme
 │   ├── features.py              # 15 feature üretimi (metin, demografik, kategori, attr)
@@ -55,8 +54,6 @@ G.G.A/
 │   ├── embedding_batch.py       # Toplu embedding üretimi (chunk + checkpoint)
 │   ├── embedding_cosine.py      # Query-item cosine similarity feature + cache
 │   ├── embedding_poc.py         # Embedding PoC (küçük batch test)
-│   ├── neg_ratio_datasets.py    # 1:1/2:1/3:1/5:1 veri seti üretici
-│   ├── data_pipeline.py         # Parametreli uçtan uca veri pipeline
 │   ├── train_mix_v2.py          # Random+BM25 karışık eğitim seti (v2)
 │   ├── submission.py            # Submission üretim araçları
 │   ├── validate_submission.py   # Submission format doğrulayıcı
@@ -79,10 +76,8 @@ G.G.A/
 │   │   └── run_embedding_score_comparison.py # Embedding cosine feature etkisi
 │   ├── submission/              # Submission
 │   │   ├── run_full_submission_v2.py    # Tam submission dosyası üretimi
-│   │   ├── run_submission_qa.py         # Submission QA kontrolü
-│   │   └── run_submission_feature_dryrun.py # Feature pipeline dry-run
+│   │   └── run_submission_qa.py         # Submission QA kontrolü
 │   └── data/                    # Veri hazırlama & kalite
-│       ├── run_data_qa_report.py        # 8 kalite kontrolü raporu
 │       ├── run_hard_neg_comparison.py   # Hard vs random negative karşılaştırma
 │       ├── run_tfidf_experiments.py     # TF-IDF parametre deneyleri
 │       └── verify_pipeline.py           # Pipeline doğrulama
@@ -96,7 +91,6 @@ G.G.A/
 │   ├── embedding_skor_kiyasi.md     # Embedding cosine etkisi (12 Temmuz)
 │   ├── teknik_rapor_v1.md           # EDA & feature bulguları (10 Temmuz)
 │   ├── rapor_yontem_v1.md           # Yöntem bölümü (13 Temmuz)
-│   ├── data_qa_raporu.md            # Veri kalite raporu (12 Temmuz)
 │   ├── offline_dependency.md        # Offline hazırlık rehberi (13 Temmuz)
 │   ├── sprint1_raporu.md            # Sprint 1 özeti
 │   ├── sprint2_raporu.md            # Sprint 2 özeti
@@ -167,14 +161,8 @@ python scripts/embedding/run_embedding_score_comparison.py
 ### Veri & Kalite
 
 ```bash
-# Veri kalite kontrolü (8 kontrol)
-python scripts/data/run_data_qa_report.py
-
-# Submission feature dry-run (10K satır test)
-python scripts/submission/run_submission_feature_dryrun.py
-
-# Tam submission dry-run (~3.36M satır)
-python scripts/submission/run_submission_feature_dryrun.py --full
+# Veri pipeline doğrulama
+python scripts/data/verify_pipeline.py
 ```
 
 ---
