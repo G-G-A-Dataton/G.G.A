@@ -177,7 +177,7 @@ def main():
 
     # TF-IDF fit & transform
     print("  TF-IDF vectorizer egitiliyor...")
-    vectorizer = build_tfidf_vectorizer(items_df, max_features=10000, ngram_range=(1, 1))
+    vectorizer = build_tfidf_vectorizer(terms_df, items_df, max_features=10000, ngram_range=(1, 1))
     merged = add_tfidf_features(merged, vectorizer)
     save_vectorizer(vectorizer, os.path.join(OUTPUT_DIR, "tfidf_vectorizer_v2.pkl"))
 
