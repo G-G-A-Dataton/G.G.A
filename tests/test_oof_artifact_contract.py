@@ -58,7 +58,10 @@ class OofArtifactContractTests(unittest.TestCase):
             candidate_config={
                 "min_candidates": 100,
                 "dense_multiplier": 2.0,
+                "bm25_hard_fraction": 0.25,
                 "category_hard_fraction": 0.5,
+                "bm25_top_n": 200,
+                "bm25_max_df_ratio": 0.15,
                 "random_state": 42,
             },
             positive_reference_rows=EXPECTED_POSITIVE_ROWS,

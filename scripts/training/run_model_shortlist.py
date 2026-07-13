@@ -49,6 +49,10 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 PRODUCTION_ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
 RANDOM_SEED = 42
 N_SPLITS = 5
+BM25_HARD_FRACTION = 0.25
+CATEGORY_HARD_FRACTION = 0.50
+BM25_TOP_N = 200
+BM25_MAX_DF_RATIO = 0.15
 
 LGBM_PARAMS = {
     "objective": "binary",
@@ -92,6 +96,16 @@ def parse_args(argv=None):
     parser.add_argument("--batch-size", type=int, default=100_000)
     parser.add_argument("--num-boost-round", type=int, default=1_200)
     parser.add_argument("--early-stopping-rounds", type=int, default=80)
+    parser.add_argument(
+        "--bm25-hard-fraction", type=float, default=BM25_HARD_FRACTION
+    )
+    parser.add_argument(
+        "--category-hard-fraction", type=float, default=CATEGORY_HARD_FRACTION
+    )
+    parser.add_argument("--bm25-top-n", type=int, default=BM25_TOP_N)
+    parser.add_argument(
+        "--bm25-max-df-ratio", type=float, default=BM25_MAX_DF_RATIO
+    )
     parser.add_argument("--artifact-dir", default=None)
     return parser.parse_args(argv)
 
@@ -134,10 +148,20 @@ def prepare_training_data(args, artifact_dir, sample_terms):
     candidates = build_test_shaped_training_set(
         selected,
         items,
+        terms_df=terms,
         positive_reference_df=positives,
         min_candidates=100,
         dense_multiplier=2.0,
-        category_hard_fraction=0.5,
+        bm25_hard_fraction=getattr(
+            args, "bm25_hard_fraction", BM25_HARD_FRACTION
+        ),
+        category_hard_fraction=getattr(
+            args, "category_hard_fraction", CATEGORY_HARD_FRACTION
+        ),
+        bm25_top_n=getattr(args, "bm25_top_n", BM25_TOP_N),
+        bm25_max_df_ratio=getattr(
+            args, "bm25_max_df_ratio", BM25_MAX_DF_RATIO
+        ),
         random_state=RANDOM_SEED,
     )
     merged = candidates.merge(
@@ -369,7 +393,16 @@ def main(argv=None):
         candidate_config={
             "min_candidates": 100,
             "dense_multiplier": 2.0,
-            "category_hard_fraction": 0.5,
+            "bm25_hard_fraction": getattr(
+                args, "bm25_hard_fraction", BM25_HARD_FRACTION
+            ),
+            "category_hard_fraction": getattr(
+                args, "category_hard_fraction", CATEGORY_HARD_FRACTION
+            ),
+            "bm25_top_n": getattr(args, "bm25_top_n", BM25_TOP_N),
+            "bm25_max_df_ratio": getattr(
+                args, "bm25_max_df_ratio", BM25_MAX_DF_RATIO
+            ),
             "random_state": 42,
         },
         positive_reference_rows=len(data["positives"]),

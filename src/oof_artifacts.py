@@ -26,6 +26,17 @@ EXPECTED_POSITIVE_ROWS = 250_000
 EXPECTED_TRAINING_ROWS = 1_877_700
 EXPECTED_TRAINING_TERMS = 17_968
 EXPECTED_TEST_ROWS = 3_359_679
+PRODUCTION_CANDIDATE_SAMPLING = {
+    "strategy": "test_shaped_bm25_category_random",
+    "min_candidates": 100,
+    "dense_multiplier": 2.0,
+    "bm25_hard_fraction": 0.25,
+    "category_hard_fraction": 0.5,
+    "bm25_top_n": 200,
+    "bm25_max_df_ratio": 0.15,
+    "random_state": 42,
+    "positive_reference_rows": EXPECTED_POSITIVE_ROWS,
+}
 
 
 def sha256_file(path):
@@ -76,7 +87,7 @@ def write_oof_manifest(
         "training": training_stats,
         "test_rows": int(test_rows),
         "candidate_sampling": {
-            "strategy": "test_shaped_category_random",
+            "strategy": "test_shaped_bm25_category_random",
             **candidate_config,
             "positive_reference_rows": int(positive_reference_rows),
         },
@@ -156,15 +167,7 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
         errors.append("TF-IDF support artifact contract mismatch")
 
     sampling = manifest.get("candidate_sampling", {})
-    expected_sampling = {
-        "strategy": "test_shaped_category_random",
-        "min_candidates": 100,
-        "dense_multiplier": 2.0,
-        "category_hard_fraction": 0.5,
-        "random_state": 42,
-        "positive_reference_rows": EXPECTED_POSITIVE_ROWS,
-    }
-    if sampling != expected_sampling:
+    if not _valid_candidate_sampling(sampling):
         errors.append("OOF candidate sampling contract mismatch")
     training = manifest.get("training", {})
     for field in ("terms", "rows", "positive_rows", "negative_rows"):
@@ -195,6 +198,8 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
             elif sha256_file(source_path) != expected_hash:
                 errors.append(f"source data SHA-256 mismatch: {filename}")
 
+    if require_full and sampling != PRODUCTION_CANDIDATE_SAMPLING:
+        errors.append("full artifacts require the production candidate sampling config")
     if require_full and (
         manifest.get("training_mode") != "full"
         or manifest.get("test_mode") != "full"
@@ -215,6 +220,45 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
     if errors:
         raise ValueError("Invalid OOF artifact manifest: " + "; ".join(errors))
     return manifest
+
+
+def _valid_candidate_sampling(sampling):
+    if not isinstance(sampling, dict) or set(sampling) != set(
+        PRODUCTION_CANDIDATE_SAMPLING
+    ):
+        return False
+    fractions = (
+        sampling.get("bm25_hard_fraction"),
+        sampling.get("category_hard_fraction"),
+    )
+    return (
+        sampling.get("strategy") == "test_shaped_bm25_category_random"
+        and isinstance(sampling.get("min_candidates"), int)
+        and not isinstance(sampling.get("min_candidates"), bool)
+        and sampling["min_candidates"] > 0
+        and isinstance(sampling.get("dense_multiplier"), (int, float))
+        and not isinstance(sampling.get("dense_multiplier"), bool)
+        and np.isfinite(sampling["dense_multiplier"])
+        and sampling["dense_multiplier"] >= 1.0
+        and all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and np.isfinite(value)
+            and 0.0 <= value <= 1.0
+            for value in fractions
+        )
+        and sum(fractions) <= 1.0
+        and isinstance(sampling.get("bm25_top_n"), int)
+        and not isinstance(sampling.get("bm25_top_n"), bool)
+        and sampling["bm25_top_n"] > 0
+        and isinstance(sampling.get("bm25_max_df_ratio"), (int, float))
+        and not isinstance(sampling.get("bm25_max_df_ratio"), bool)
+        and np.isfinite(sampling["bm25_max_df_ratio"])
+        and 0.0 < sampling["bm25_max_df_ratio"] <= 1.0
+        and isinstance(sampling.get("random_state"), int)
+        and not isinstance(sampling.get("random_state"), bool)
+        and sampling.get("positive_reference_rows") == EXPECTED_POSITIVE_ROWS
+    )
 
 
 def load_oof_artifacts(output_dir, require_full=False, source_data_dir=None):

@@ -8,7 +8,7 @@ import pandas as pd
 from src.negative_sampling import generate_random_negatives
 
 
-CANDIDATE_SAMPLING_SCHEMA_VERSION = 1
+CANDIDATE_SAMPLING_SCHEMA_VERSION = 2
 
 
 def sample_complete_terms(positive_df, n_terms, random_state=42):
@@ -60,19 +60,24 @@ def build_test_shaped_training_set(
     positive_df,
     items_df,
     *,
+    terms_df=None,
     positive_reference_df=None,
     min_candidates=100,
     dense_multiplier=2.0,
+    bm25_hard_fraction=0.0,
     category_hard_fraction=0.5,
+    bm25_top_n=200,
+    bm25_max_df_ratio=0.15,
+    bm25_index=None,
     random_state=42,
     verbose=True,
 ):
     """Build per-query candidate sets that mirror the submission distribution.
 
-    Known positives are retained. A configurable share of the negative quota is
-    sampled from the positive products' level-2 category; the remainder is
-    filled from the full catalog. Every pair is unique and all known positives
-    are excluded from both negative sources.
+    Known positives are retained. Configurable shares of each negative quota
+    come from BM25 retrieval and the positive products' level-2 categories;
+    the remainder is filled from the full catalog. Every pair is unique and
+    all known positives are excluded from every negative source.
     """
     _validate_positive_pairs(positive_df, "positive_df")
     positive_reference_df = (
@@ -80,15 +85,21 @@ def build_test_shaped_training_set(
     )
     _validate_positive_pairs(positive_reference_df, "positive_reference_df")
     _validate_catalog(items_df)
+    _validate_hard_fraction(bm25_hard_fraction, "bm25_hard_fraction")
+    _validate_hard_fraction(category_hard_fraction, "category_hard_fraction")
+    if float(bm25_hard_fraction) + float(category_hard_fraction) > 1.0:
+        raise ValueError("BM25 and category hard fractions must sum to at most 1")
+    if isinstance(bm25_top_n, bool) or not isinstance(bm25_top_n, int) or bm25_top_n <= 0:
+        raise ValueError("bm25_top_n must be a positive integer")
     if (
-        isinstance(category_hard_fraction, bool)
+        isinstance(bm25_max_df_ratio, bool)
         or not isinstance(
-            category_hard_fraction, (int, float, np.integer, np.floating)
+            bm25_max_df_ratio, (int, float, np.integer, np.floating)
         )
-        or not np.isfinite(category_hard_fraction)
-        or not 0.0 <= float(category_hard_fraction) <= 1.0
+        or not np.isfinite(bm25_max_df_ratio)
+        or not 0.0 < float(bm25_max_df_ratio) <= 1.0
     ):
-        raise ValueError("category_hard_fraction must be in [0, 1]")
+        raise ValueError("bm25_max_df_ratio must be in (0, 1]")
 
     selected_pairs = positive_df[["term_id", "item_id"]].drop_duplicates()
     reference_pairs = positive_reference_df[["term_id", "item_id"]].drop_duplicates()
@@ -114,6 +125,22 @@ def build_test_shaped_training_set(
     blocked_by_term = {
         term_id: set(group["item_id"].tolist())
         for term_id, group in complete_reference.groupby("term_id", sort=False)
+    }
+
+    bm25_negatives = _sample_bm25_negatives(
+        targets,
+        blocked_by_term,
+        items_df,
+        terms_df=terms_df,
+        fraction=float(bm25_hard_fraction),
+        top_n=bm25_top_n,
+        max_df_ratio=float(bm25_max_df_ratio),
+        index=bm25_index,
+    )
+    bm25_counts = bm25_negatives.groupby("term_id", observed=True).size()
+    bm25_by_term = {
+        term_id: set(group["item_id"].tolist())
+        for term_id, group in bm25_negatives.groupby("term_id", sort=False)
     }
 
     catalog = items_df[["item_id", "category"]].copy()
@@ -151,7 +178,9 @@ def build_test_shaped_training_set(
         if not category_keys:
             continue
         selected = set()
-        blocked = blocked_by_term.get(term_id, set())
+        blocked = blocked_by_term.get(term_id, set()) | bm25_by_term.get(
+            term_id, set()
+        )
         max_attempts = max(100, desired * 30)
         attempts = 0
         while len(selected) < desired and attempts < max_attempts:
@@ -175,6 +204,8 @@ def build_test_shaped_training_set(
     category_negatives["neg_source"] = "category"
 
     missing_counts = targets["negative_count"].sub(
+        bm25_counts, fill_value=0
+    ).sub(
         pd.Series(hard_counts, dtype="int64"), fill_value=0
     ).astype("int64")
     missing_terms = np.repeat(missing_counts.index.to_numpy(), missing_counts.to_numpy())
@@ -187,7 +218,9 @@ def build_test_shaped_training_set(
             random_state=random_state,
             verbose=False,
             positive_reference_df=positive_reference_df,
-            excluded_pairs_df=category_negatives,
+            excluded_pairs_df=pd.concat(
+                [bm25_negatives, category_negatives], ignore_index=True
+            ),
         )
         random_negatives["neg_source"] = "random"
     else:
@@ -199,7 +232,7 @@ def build_test_shaped_training_set(
     positives["label"] = 1
     positives["neg_source"] = "positive"
     result = pd.concat(
-        [positives, category_negatives, random_negatives],
+        [positives, bm25_negatives, category_negatives, random_negatives],
         ignore_index=True,
     )
     result = result.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
@@ -210,6 +243,7 @@ def build_test_shaped_training_set(
         print(
             "[candidate_sampling] "
             f"{len(targets):,} terms, {len(result):,} candidates, "
+            f"{source_counts.get('bm25', 0):,} BM25 negatives, "
             f"{source_counts.get('category', 0):,} category negatives, "
             f"{source_counts.get('random', 0):,} random negatives"
         )
@@ -222,7 +256,7 @@ def candidate_distribution(frame):
         raise ValueError("frame must contain non-empty term_id and label columns")
     counts = frame.groupby("term_id").size()
     positives = frame.groupby("term_id")["label"].sum()
-    return {
+    result = {
         "terms": int(len(counts)),
         "rows": int(len(frame)),
         "positive_rows": int(frame["label"].sum()),
@@ -234,6 +268,75 @@ def candidate_distribution(frame):
         "positive_prevalence": float(frame["label"].mean()),
         "positive_per_term_mean": float(positives.mean()),
     }
+    if "neg_source" in frame.columns:
+        result["source_rows"] = {
+            str(source): int(count)
+            for source, count in frame["neg_source"].value_counts().sort_index().items()
+        }
+    return result
+
+
+def _sample_bm25_negatives(
+    targets,
+    blocked_by_term,
+    items_df,
+    *,
+    terms_df,
+    fraction,
+    top_n,
+    max_df_ratio,
+    index,
+):
+    columns = ["term_id", "item_id", "label", "neg_source"]
+    if fraction == 0.0:
+        return pd.DataFrame(columns=columns)
+    if terms_df is None or not {"term_id", "query"}.issubset(terms_df.columns):
+        raise ValueError("terms_df with term_id and query is required for BM25 sampling")
+    if terms_df["term_id"].isna().any() or terms_df["term_id"].duplicated().any():
+        raise ValueError("terms_df term_id values must be non-null and unique")
+    query_by_term = terms_df.set_index("term_id")["query"]
+    missing_terms = targets.index.difference(query_by_term.index)
+    if len(missing_terms):
+        raise ValueError(
+            "terms_df is missing sampled term_id values: "
+            f"{missing_terms[:5].tolist()}"
+        )
+
+    if index is None:
+        required = {"item_id", "title", "category", "brand"}
+        missing = sorted(required - set(items_df.columns))
+        if missing:
+            raise ValueError(f"items_df is missing BM25 columns: {missing}")
+        from src.bm25_hard_negative import BM25Index, standardize_item_text
+
+        index = BM25Index(
+            items_df["item_id"].to_numpy(),
+            standardize_item_text(items_df).tolist(),
+            max_df_ratio=max_df_ratio,
+        )
+
+    negative_terms = []
+    negative_items = []
+    for term_id, row in targets.sort_index().iterrows():
+        desired = int(round(row["negative_count"] * fraction))
+        if desired == 0:
+            continue
+        blocked = blocked_by_term.get(term_id, set())
+        candidate_limit = max(top_n, desired + len(blocked))
+        selected = []
+        for item_id in index.top_n(query_by_term.loc[term_id], n=candidate_limit):
+            if item_id not in blocked:
+                selected.append(item_id)
+                if len(selected) == desired:
+                    break
+        negative_terms.extend([term_id] * len(selected))
+        negative_items.extend(selected)
+
+    result = pd.DataFrame(
+        {"term_id": negative_terms, "item_id": negative_items, "label": 0}
+    )
+    result["neg_source"] = "bm25"
+    return result[columns]
 
 
 def _category_key(value):
@@ -273,6 +376,16 @@ def _validate_catalog(items_df):
         raise ValueError("items_df must contain non-empty item_id and category columns")
     if items_df["item_id"].isna().any() or items_df["item_id"].duplicated().any():
         raise ValueError("items_df item_id values must be non-null and unique")
+
+
+def _validate_hard_fraction(value, name):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float, np.integer, np.floating))
+        or not np.isfinite(value)
+        or not 0.0 <= float(value) <= 1.0
+    ):
+        raise ValueError(f"{name} must be in [0, 1]")
 
 
 def _validate_result(result, reference_pairs, targets):
