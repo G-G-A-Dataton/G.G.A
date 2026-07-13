@@ -407,7 +407,7 @@ def compute_material_match(query, attributes_str):
 # 5. Ana Feature Builder (features.py ile entegrasyon için)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def add_attribute_features(df):
+def add_attribute_features(df, verbose=True):
     """
     Birleştirilmiş DataFrame'e attributes tabanlı feature'ları ekler.
 
@@ -471,25 +471,29 @@ def add_attribute_features(df):
             return 0
         return 1 if item_value in query_values else -1
 
-    print("[attributes] query_color_match hesaplanıyor...")
+    if verbose:
+        print("[attributes] query_color_match hesaplanıyor...")
     out["query_color_match"] = [
         match(query_value[0], item_value[0])
         for query_value, item_value in zip(query_values, item_values)
     ]
 
-    print("[attributes] query_size_match hesaplanıyor...")
+    if verbose:
+        print("[attributes] query_size_match hesaplanıyor...")
     out["query_size_match"] = [
         match(query_value[1], item_value[1])
         for query_value, item_value in zip(query_values, item_values)
     ]
 
-    print("[attributes] query_material_match hesaplanıyor...")
+    if verbose:
+        print("[attributes] query_material_match hesaplanıyor...")
     out["query_material_match"] = [
         match(query_value[2], item_value[2])
         for query_value, item_value in zip(query_values, item_values)
     ]
 
-    print("[attributes] Attribute feature'ları hesaplandı.")
+    if verbose:
+        print("[attributes] Attribute feature'ları hesaplandı.")
     return out
 
 

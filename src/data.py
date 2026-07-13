@@ -11,6 +11,36 @@ olarak yüklemek ve birleştirmek için kullanılır.
 import os
 import pandas as pd
 
+
+TERM_COLUMNS = ["term_id", "query"]
+ITEM_COLUMNS = [
+    "item_id",
+    "title",
+    "category",
+    "brand",
+    "gender",
+    "age_group",
+    "attributes",
+]
+TRAIN_PAIR_COLUMNS = ["id", "term_id", "item_id", "label"]
+SUBMISSION_PAIR_COLUMNS = ["id", "term_id", "item_id"]
+
+
+def _validate_frame(df, expected_columns, id_column, source):
+    actual_columns = df.columns.tolist()
+    if actual_columns != expected_columns:
+        raise ValueError(
+            f"{source} columns must be {expected_columns}, got {actual_columns}"
+        )
+    if df.empty:
+        raise ValueError(f"{source} must not be empty")
+    if df[id_column].isna().any():
+        raise ValueError(f"{source} contains null {id_column} values")
+    if df[id_column].duplicated().any():
+        raise ValueError(f"{source} contains duplicate {id_column} values")
+    return df
+
+
 def load_terms(file_path):
     """
     Sorgu terimlerini (terms.csv) belleği optimize ederek yükler.
@@ -35,7 +65,11 @@ def load_terms(file_path):
     
     # CSV'yi okurken veri tiplerini zorunlu kılıyoruz
     df = pd.read_csv(file_path, dtype=dtypes)
+    _validate_frame(df, TERM_COLUMNS, "term_id", os.path.basename(file_path))
+    if df["query"].isna().any():
+        raise ValueError(f"{os.path.basename(file_path)} contains null query values")
     return df
+
 
 def load_items(file_path):
     """
@@ -62,11 +96,17 @@ def load_items(file_path):
         'attributes': 'string'
     }
     df = pd.read_csv(file_path, dtype=dtypes)
+    _validate_frame(df, ITEM_COLUMNS, "item_id", os.path.basename(file_path))
+    if df["title"].isna().any() or df["category"].isna().any():
+        raise ValueError(
+            f"{os.path.basename(file_path)} contains null title or category values"
+        )
     
     # brand (marka) alanında bazen boş (NaN) değerler olabiliyor.
     # Bunları modelleme sırasında hata almamak için boş string ('') ile dolduruyoruz.
     df['brand'] = df['brand'].fillna('')
     return df
+
 
 def merge_pairs(pairs_path, terms_df, items_df, is_train=True):
     """
@@ -97,6 +137,22 @@ def merge_pairs(pairs_path, terms_df, items_df, is_train=True):
         dtypes['label'] = 'int8' 
         
     pairs_df = pd.read_csv(pairs_path, dtype=dtypes)
+    expected_columns = TRAIN_PAIR_COLUMNS if is_train else SUBMISSION_PAIR_COLUMNS
+    if pairs_df.columns.tolist() != expected_columns:
+        raise ValueError(
+            f"{os.path.basename(pairs_path)} columns must be {expected_columns}, "
+            f"got {pairs_df.columns.tolist()}"
+        )
+    if pairs_df.empty or pairs_df[expected_columns].isna().any().any():
+        raise ValueError(f"{os.path.basename(pairs_path)} contains no rows or null values")
+    if pairs_df["id"].duplicated().any():
+        raise ValueError(f"{os.path.basename(pairs_path)} contains duplicate id values")
+    if pairs_df.duplicated(["term_id", "item_id"]).any():
+        raise ValueError(
+            f"{os.path.basename(pairs_path)} contains duplicate term-item pairs"
+        )
+    if is_train and not pairs_df["label"].isin([0, 1]).all():
+        raise ValueError(f"{os.path.basename(pairs_path)} contains non-binary labels")
     
     # Adım 1: training_pairs içindeki 'term_id' ile terms.csv içindeki 'term_id'yi eşleştir.
     # 'left' merge: training_pairs'deki tüm satırları koru, terms_df'den eşleşenleri yanına ekle.
@@ -107,6 +163,11 @@ def merge_pairs(pairs_path, terms_df, items_df, is_train=True):
 
     # Adım 2: Aynı işlemi ürünler için yap. 'item_id' kolonunu kullanarak ürün detaylarını yanına çek.
     merged = pd.merge(merged, items_df, on='item_id', how='left', validate='many_to_one')
+
+    if merged[["query", "title"]].isna().any().any():
+        raise ValueError(
+            f"{os.path.basename(pairs_path)} contains unresolved term_id or item_id values"
+        )
     
     # Geriye tüm bilgilerin (query, title, brand, category, label) yan yana olduğu tablo döner
     return merged

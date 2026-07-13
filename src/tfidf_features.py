@@ -27,10 +27,13 @@ Bu modül şunları sağlar:
 
 import os
 import pickle
+from itertools import chain
+
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+
+from src.item_text import build_item_texts, clean_text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -74,22 +77,34 @@ def build_tfidf_vectorizer(
     TfidfVectorizer
         Eğitilmiş (fitted) sklearn TF-IDF vectorizer nesnesi.
     """
+    if not isinstance(max_features, int) or max_features <= 0:
+        raise ValueError("max_features must be a positive integer")
+    if (
+        not isinstance(ngram_range, tuple)
+        or len(ngram_range) != 2
+        or not all(isinstance(value, int) and value > 0 for value in ngram_range)
+        or ngram_range[0] > ngram_range[1]
+    ):
+        raise ValueError("ngram_range must be a pair of positive increasing integers")
+    if not isinstance(min_df, int) or min_df <= 0:
+        raise ValueError("min_df must be a positive integer")
+    if "query" not in terms_df.columns:
+        raise ValueError("terms_df must contain query")
+
     print("[tfidf] Metin korpusu hazirlaniyor...")
 
     # Sorgu metinlerini topla
-    query_texts = terms_df["query"].fillna("").tolist()
+    query_texts = [clean_text(query) for query in terms_df["query"]]
 
     # Ürün metinlerini birleştir: title + category + brand
     # Bu kombinasyon daha zengin bir kelime temsili sağlar
-    item_texts = (
-        items_df["title"].fillna("") + " " +
-        items_df["category"].astype(str).str.replace("/", " ", regex=False).fillna("") + " " +
-        items_df["brand"].fillna("")
-    ).tolist()
+    item_texts = build_item_texts(items_df, include_attrs=True)
 
     # Tüm metinleri tek bir listede birleştir (vocabulary tüm kelimelerden oluşsun)
-    all_texts = query_texts + item_texts
-    print(f"[tfidf] Toplam {len(all_texts):,} metin ile egitim basliyor...")
+    print(
+        f"[tfidf] Toplam {len(query_texts) + len(item_texts):,} metin ile "
+        "egitim basliyor..."
+    )
 
     # TF-IDF vectorizer'ı eğit
     vectorizer = TfidfVectorizer(
@@ -101,7 +116,7 @@ def build_tfidf_vectorizer(
         strip_accents="unicode",
         lowercase=True,
     )
-    vectorizer.fit(all_texts)
+    vectorizer.fit(chain(query_texts, item_texts))
     vocab_size = len(vectorizer.vocabulary_)
     print(f"[tfidf] Egitim tamamlandi. Kelime dagarciği boyutu: {vocab_size:,}")
 
@@ -120,9 +135,12 @@ def save_vectorizer(vectorizer: TfidfVectorizer, path: str) -> None:
       50K metni eğitmek birkaç dakika sürer. Her seferinde tekrar yapmak yerine
       bir kez kaydet, sürekli yükle.
     """
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as f:
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    temporary_path = os.path.abspath(path) + ".tmp"
+    with open(temporary_path, "wb") as f:
         pickle.dump(vectorizer, f)
+    os.replace(temporary_path, path)
     print(f"[tfidf] Vectorizer kaydedildi: {path}")
 
 
@@ -145,6 +163,7 @@ def compute_tfidf_cosine_batch(
     item_texts: list,
     vectorizer: TfidfVectorizer,
     batch_size: int = 5_000,
+    verbose: bool = True,
 ) -> np.ndarray:
     """
     Sorgu ve ürün metinleri arasında TF-IDF cosine similarity hesaplar.
@@ -169,10 +188,18 @@ def compute_tfidf_cosine_batch(
     np.ndarray, shape=(n_samples,)
         Her satır için [0.0, 1.0] arasında bir cosine similarity skoru.
     """
+    if not isinstance(batch_size, int) or batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
     n = len(query_texts)
+    if n != len(item_texts):
+        raise ValueError("query_texts and item_texts must have equal length")
     similarities = np.zeros(n, dtype=np.float32)
 
-    print(f"[tfidf] {n:,} satir icin cosine similarity hesaplaniyor (batch={batch_size:,})...")
+    if verbose:
+        print(
+            f"[tfidf] {n:,} satir icin cosine similarity hesaplaniyor "
+            f"(batch={batch_size:,})..."
+        )
 
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
@@ -186,10 +213,12 @@ def compute_tfidf_cosine_batch(
         batch_sim = q_batch.multiply(i_batch).sum(axis=1)
         similarities[start:end] = np.asarray(batch_sim).flatten()
 
-        if (start // batch_size + 1) % 10 == 0:
+        if verbose and (start // batch_size + 1) % 10 == 0:
             print(f"  ... {end:,}/{n:,} satir islendi")
 
-    print(f"[tfidf] Tamamlandi. Ortalama cosine: {similarities.mean():.4f}")
+    if verbose:
+        mean_similarity = float(similarities.mean()) if n else 0.0
+        print(f"[tfidf] Tamamlandi. Ortalama cosine: {mean_similarity:.4f}")
     return similarities
 
 
@@ -201,6 +230,7 @@ def add_tfidf_features(
     df: pd.DataFrame,
     vectorizer: TfidfVectorizer,
     batch_size: int = 5_000,
+    verbose: bool = True,
 ) -> pd.DataFrame:
     """
     Birleştirilmiş DataFrame'e TF-IDF cosine similarity feature'larını ekler.
@@ -225,21 +255,25 @@ def add_tfidf_features(
     pd.DataFrame
         'tfidf_cosine' kolonu eklenmiş DataFrame.
     """
+    required = {"query", "title", "category", "brand"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"TF-IDF input is missing required columns: {missing}")
     out = df.copy()
 
     # Sorgu metinleri
-    query_texts = out["query"].fillna("").tolist()
+    query_texts = [clean_text(query) for query in out["query"]]
 
     # Ürün metinleri: title + category (/ → boşluk) + brand
-    item_texts = (
-        out["title"].fillna("") + " " +
-        out["category"].astype(str).str.replace("/", " ", regex=False).fillna("") + " " +
-        out["brand"].fillna("")
-    ).tolist()
+    item_texts = build_item_texts(out, include_attrs=True)
 
     # Cosine similarity hesapla
     out["tfidf_cosine"] = compute_tfidf_cosine_batch(
-        query_texts, item_texts, vectorizer, batch_size=batch_size
+        query_texts,
+        item_texts,
+        vectorizer,
+        batch_size=batch_size,
+        verbose=verbose,
     )
 
     return out
@@ -274,7 +308,7 @@ def run_tfidf_poc(terms_df, items_df, pairs_df, sample_size=500):
 
     # Vectorizer eğit
     vectorizer = build_tfidf_vectorizer(
-        terms_df, items_df, max_features=20_000, ngram_range=(1, 2)
+        terms_df, items_df, max_features=10_000, ngram_range=(1, 1), min_df=2
     )
 
     # Feature ekle
@@ -332,10 +366,9 @@ if __name__ == "__main__":
 
     # Merge et
     print("Merge yapiliyor...")
-    merged = merge_pairs.__wrapped__(small_train, terms_df, items_df) if hasattr(merge_pairs, '__wrapped__') else None
-    if merged is None:
-        merged = small_train.merge(terms_df, on="term_id", how="left")
-        merged = merged.merge(items_df, on="item_id", how="left")
+    merged = small_train.merge(
+        terms_df, on="term_id", how="left", validate="many_to_one"
+    ).merge(items_df, on="item_id", how="left", validate="many_to_one")
 
     # TF-IDF PoC çalıştır
     run_tfidf_poc(terms_df, items_df, merged, sample_size=500)

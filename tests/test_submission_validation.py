@@ -77,6 +77,24 @@ class SubmissionValidationTests(unittest.TestCase):
             )
         )
 
+    def test_sample_validation_checks_cross_chunk_duplicates(self):
+        duplicate_sample_path = os.path.join(self.temp_dir.name, "duplicate_sample.csv")
+        pd.DataFrame(
+            {"id": ["a", "b", "a"], "prediction": [0, 0, 0]}
+        ).to_csv(duplicate_sample_path, index=False)
+        submission_path = self.write_submission(
+            pd.DataFrame({"id": ["a", "b", "a"], "prediction": [0, 1, 0]})
+        )
+        self.assertFalse(
+            validate_submission(
+                submission_path,
+                sample_submission_path=duplicate_sample_path,
+                expected_rows=3,
+                verbose=False,
+                chunk_size=1,
+            )
+        )
+
     def test_sample_prefix_validation_supports_inference_smoke_runs(self):
         submission_path = self.write_submission(
             pd.DataFrame({"id": ["a", "b"], "prediction": [0, 1]})

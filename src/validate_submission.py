@@ -72,7 +72,9 @@ def validate_submission(
     id_has_null = False
     id_has_duplicate = False
     id_order_matches = True
-    seen_ids = set() if sample_reader is None else None
+    # Duplicate IDs are invalid even when a sample file is supplied. Keep the
+    # global set so duplicates spanning CSV chunk boundaries are also caught.
+    seen_ids = set()
     sample_iterator = iter(sample_reader) if sample_reader is not None else None
 
     try:
@@ -91,6 +93,10 @@ def validate_submission(
                 ids = sub_chunk["id"]
                 id_has_null |= bool(ids.isna().any())
                 id_has_duplicate |= bool(ids.duplicated().any())
+                non_null_ids = ids.dropna().tolist()
+                if any(item_id in seen_ids for item_id in non_null_ids):
+                    id_has_duplicate = True
+                seen_ids.update(non_null_ids)
                 if sample_iterator is not None:
                     sample_chunk = next(sample_iterator, None)
                     if sample_chunk is None:
@@ -100,11 +106,6 @@ def validate_submission(
                         id_order_matches &= ids.reset_index(drop=True).equals(
                             sample_chunk["id"].reset_index(drop=True)
                         )
-                else:
-                    non_null_ids = ids.dropna().tolist()
-                    if any(item_id in seen_ids for item_id in non_null_ids):
-                        id_has_duplicate = True
-                    seen_ids.update(non_null_ids)
 
         if sample_iterator is not None:
             remaining_sample = next(sample_iterator, None)

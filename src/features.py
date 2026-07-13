@@ -15,8 +15,14 @@ güçlü overlap (örtüşme) yöntemleri kullanır.
 
 Üretilen feature'lar:
   --- Metin Benzerliği ---
-  - query_title_overlap    : Sorgu ile ürün başlığı arasındaki kelime örtüşmesi
+  - query_title_overlap    : Sorgu ile ürün başlığı arasındaki Jaccard örtüşmesi
+  - query_title_coverage   : Sorgu tokenlerinin başlık tarafından kapsanma oranı
+  - query_title_precision  : Başlık tokenlerinin sorguyla örtüşme oranı
+  - query_title_phrase     : Sorgu başlıkta tam ifade olarak geçiyor mu?
   - query_category_overlap : Sorgu ile ürün kategorisinin tamamı arasındaki kelime örtüşmesi
+  - query_category_coverage: Sorgunun kategori tarafından kapsanma oranı
+  - query_model_token_match: Harf-rakam içeren model kodu eşleşmesi
+  - query_model_token_conflict: Sorgu ve başlıktaki model kodları çelişiyor mu?
   - query_brand_match      : Sorguda marka adı tam olarak geçiyor mu?
   - query_cat_l1_overlap   : Sorgu ile L1 (en genel) kategori arasındaki örtüşme
   - title_len              : Ürün başlığının uzunluğu
@@ -35,10 +41,12 @@ güçlü overlap (örtüşme) yöntemleri kullanır.
   - query_material_match   : Sorgudaki materyal bilgisi ürünün materyaliyle uyuşuyor mu? (-1/0/1)
 """
 
+import re
+
 import pandas as pd
 
 from src.attributes import add_attribute_features, ATTRIBUTE_FEATURE_COLS
-from src.text_utils import contains_phrase, find_phrase_values
+from src.text_utils import contains_phrase, find_phrase_values, normalize_for_matching
 
 
 _QUERY_GENDER_KEYWORDS = {
@@ -55,7 +63,9 @@ _AGE_KEYWORDS = {
     "yetişkin": "yetişkin", "yetiskin": "yetişkin", "adult": "yetişkin",
 }
 
-FEATURE_SCHEMA_VERSION = 2
+FEATURE_SCHEMA_VERSION = 3
+
+_MODEL_TOKEN_RE = re.compile(r"^(?=.*\d)[a-z0-9]{3,}$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,7 +80,7 @@ def tokenize(text):
     """
     if not text or not isinstance(text, str):
         return set()
-    return set(text.lower().split())
+    return set(normalize_for_matching(text).split())
 
 
 def jaccard_overlap(text1, text2):
@@ -105,6 +115,22 @@ def _jaccard_token_sets(tokens1, tokens2):
     intersection = tokens1 & tokens2
     union = tokens1 | tokens2
     return len(intersection) / len(union)
+
+
+def _coverage_token_sets(query_tokens, document_tokens):
+    if not query_tokens or not document_tokens:
+        return 0.0
+    return len(query_tokens & document_tokens) / len(query_tokens)
+
+
+def _precision_token_sets(query_tokens, document_tokens):
+    if not query_tokens or not document_tokens:
+        return 0.0
+    return len(query_tokens & document_tokens) / len(document_tokens)
+
+
+def _model_tokens(tokens):
+    return {token for token in tokens if _MODEL_TOKEN_RE.match(token)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -276,7 +302,7 @@ def split_category_levels(category):
     """
     if not isinstance(category, str):
         return "", "", "", 0
-    parts = [p.strip() for p in category.split("/")]
+    parts = [part.strip() for part in category.split("/") if part.strip()]
     depth = len(parts)  # Kaç seviye olduğunu say
     l1 = parts[0] if depth >= 1 else ""
     l2 = parts[1] if depth >= 2 else ""
@@ -336,7 +362,7 @@ def compute_cat_depth(category):
 # 3. Ana Feature Builder
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_features(df):
+def build_features(df, verbose=True):
     """
     Birleştirilmiş (merge edilmiş) bir DataFrame'e tüm feature'ları hesaplayıp ekler.
 
@@ -381,6 +407,14 @@ def build_features(df):
             query_token_cache[key] = tokenize(query)
         query_tokens.append(query_token_cache[key])
 
+    title_token_cache = {}
+    title_tokens = []
+    for title in titles:
+        key = title if isinstance(title, str) else None
+        if key not in title_token_cache:
+            title_token_cache[key] = tokenize(title)
+        title_tokens.append(title_token_cache[key])
+
     category_cache = {}
     category_values = []
     for category in categories:
@@ -394,49 +428,74 @@ def build_features(df):
             )
         category_values.append(category_cache[key])
 
-    print("[features] query_title_overlap hesaplanıyor...")
+    if verbose:
+        print("[features] lexical features hesaplanıyor...")
     out["query_title_overlap"] = [
-        _jaccard_token_sets(tokens, tokenize(title))
-        for tokens, title in zip(query_tokens, titles)
+        _jaccard_token_sets(query_set, title_set)
+        for query_set, title_set in zip(query_tokens, title_tokens)
+    ]
+    out["query_title_coverage"] = [
+        _coverage_token_sets(query_set, title_set)
+        for query_set, title_set in zip(query_tokens, title_tokens)
+    ]
+    out["query_title_precision"] = [
+        _precision_token_sets(query_set, title_set)
+        for query_set, title_set in zip(query_tokens, title_tokens)
+    ]
+    out["query_title_phrase"] = [
+        int(bool(normalize_for_matching(query)) and contains_phrase(title, query))
+        for query, title in zip(queries, titles)
     ]
 
-    print("[features] query_category_overlap hesaplanıyor...")
     out["query_category_overlap"] = [
         _jaccard_token_sets(tokens, category_value[0])
         for tokens, category_value in zip(query_tokens, category_values)
     ]
+    out["query_category_coverage"] = [
+        _coverage_token_sets(tokens, category_value[0])
+        for tokens, category_value in zip(query_tokens, category_values)
+    ]
 
-    print("[features] query_brand_match hesaplanıyor...")
+    query_model_tokens = [_model_tokens(tokens) for tokens in query_tokens]
+    title_model_tokens = [_model_tokens(tokens) for tokens in title_tokens]
+    out["query_model_token_match"] = [
+        int(bool(query_models & title_models))
+        for query_models, title_models in zip(query_model_tokens, title_model_tokens)
+    ]
+    out["query_model_token_conflict"] = [
+        int(bool(query_models) and bool(title_models) and not query_models & title_models)
+        for query_models, title_models in zip(query_model_tokens, title_model_tokens)
+    ]
+
     out["query_brand_match"] = [
         compute_query_brand_match(query, brand)
         for query, brand in zip(queries, brands)
     ]
 
-    print("[features] query_cat_l1_overlap hesaplanıyor...")
     out["query_cat_l1_overlap"] = [
         _jaccard_token_sets(tokens, category_value[1])
         for tokens, category_value in zip(query_tokens, category_values)
     ]
 
-    print("[features] title_len ve query_len hesaplanıyor...")
-    # Kısa ürün başlıkları (örn. sadece model numarası) anlamlı sinyal vermez
+    # Character and token lengths capture different title verbosity effects.
     out["title_len"] = out["title"].fillna("").str.len()
     out["query_len"] = out["query"].fillna("").str.len()
+    out["title_token_count"] = [len(tokens) for tokens in title_tokens]
+    out["query_token_count"] = [len(tokens) for tokens in query_tokens]
 
-    print("[features] gender_match hesaplanıyor...")
+    if verbose:
+        print("[features] demographic features hesaplanıyor...")
     out["gender_match"] = [
         compute_gender_match(query, gender)
         for query, gender in zip(queries, out["gender"])
     ]
 
     # ── 4 Temmuz: Demografik feature'lar ──────────────────────────────────────
-    print("[features] age_group_match hesaplanıyor...")
     out["age_group_match"] = [
         compute_age_group_match(query, age_group)
         for query, age_group in zip(queries, out["age_group"])
     ]
 
-    print("[features] demographic_conflict hesaplanıyor...")
     # gender_match ve age_group_match hesaplandıktan SONRA çalıştırılmalı
     out["demographic_conflict"] = (
         (out["gender_match"] == -1) | (out["age_group_match"] == -1)
@@ -448,19 +507,18 @@ def build_features(df):
     # L2 ve L3 ile daha spesifik eşleşme yapılabilir:
     #   query="spor ayakkabı"  + cat_l2="spor ayakkabı" → güçlü sinyal
     #   query="sneaker"        + cat_l3="sneaker"       → çok güçlü sinyal
-    print("[features] query_cat_l2_overlap hesaplanıyor...")
+    if verbose:
+        print("[features] category hierarchy features hesaplanıyor...")
     out["query_cat_l2_overlap"] = [
         _jaccard_token_sets(tokens, category_value[2])
         for tokens, category_value in zip(query_tokens, category_values)
     ]
 
-    print("[features] query_cat_l3_overlap hesaplanıyor...")
     out["query_cat_l3_overlap"] = [
         _jaccard_token_sets(tokens, category_value[3])
         for tokens, category_value in zip(query_tokens, category_values)
     ]
 
-    print("[features] cat_depth hesaplanıyor...")
     # cat_depth: "ayakkabı" = 1, "ayakkabı/spor" = 2, "ayakkabı/spor/sneaker" = 3
     # Derin kategoriler daha spesifik ürünlere işaret eder — model bunu öğrenebilir
     out["cat_depth"] = [value[4] for value in category_values]
@@ -470,10 +528,12 @@ def build_features(df):
     # Bu bilgiler title'da yer almayabilir ama sorguda geçiyor olabilir.
     # Sprint 1 raporunda tespit edilmişti: kısa title'lar (örn. "530") TF-IDF için anlamsız.
     # Attributes bu boşluğu kapatır: "siyah 42 deri ayakkabı" sorgusunda tüm üç feature çalışır.
-    print("[features] Attributes feature'ları (renk, beden, materyal) hesaplanıyor...")
-    out = add_attribute_features(out)
+    if verbose:
+        print("[features] attribute features hesaplanıyor...")
+    out = add_attribute_features(out, verbose=verbose)
 
-    print("[features] Tum feature'lar hesaplandi.")
+    if verbose:
+        print("[features] Tum feature'lar hesaplandi.")
     return out
 
 
@@ -482,11 +542,19 @@ def build_features(df):
 FEATURE_COLS = [
     # Metin benzerliği feature'ları (3 Temmuz)
     "query_title_overlap",
+    "query_title_coverage",
+    "query_title_precision",
+    "query_title_phrase",
     "query_category_overlap",
+    "query_category_coverage",
+    "query_model_token_match",
+    "query_model_token_conflict",
     "query_brand_match",
     "query_cat_l1_overlap",
     "title_len",
     "query_len",
+    "title_token_count",
+    "query_token_count",
     # Demografik feature'lar (4 Temmuz)
     "gender_match",
     "age_group_match",

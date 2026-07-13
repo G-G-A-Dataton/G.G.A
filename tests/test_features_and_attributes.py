@@ -9,6 +9,8 @@ from src.features import (
     compute_age_group_match,
     compute_gender_match,
     compute_query_brand_match,
+    compute_cat_depth,
+    tokenize,
 )
 from src.item_text import parse_attributes_flat
 
@@ -84,6 +86,41 @@ class ExactTextMatchingTests(unittest.TestCase):
         self.assertEqual(result[FEATURE_COLS].columns.tolist(), FEATURE_COLS)
         self.assertEqual(result.loc[0, "query_color_match"], 1)
         self.assertEqual(result.loc[0, "query_material_match"], 1)
+
+    def test_lexical_features_normalize_punctuation_and_model_codes(self):
+        frame = pd.DataFrame(
+            [
+                {
+                    "item_id": "i1",
+                    "query": "Samsung SM-A536B telefon",
+                    "title": "Samsung Galaxy SM A536B Telefon",
+                    "category": "Elektronik/Cep Telefonu",
+                    "brand": "Samsung",
+                    "gender": "unisex",
+                    "age_group": "yetişkin",
+                    "attributes": "",
+                },
+                {
+                    "item_id": "i2",
+                    "query": "Samsung A536B telefon",
+                    "title": "Samsung Galaxy A525F Telefon",
+                    "category": "Elektronik/Cep Telefonu",
+                    "brand": "Samsung",
+                    "gender": "unisex",
+                    "age_group": "yetişkin",
+                    "attributes": "",
+                },
+            ]
+        )
+        result = build_features(frame, verbose=False)
+        self.assertIn("a536b", tokenize("SM-A536B"))
+        self.assertEqual(result["query_model_token_match"].tolist(), [1, 0])
+        self.assertEqual(result["query_model_token_conflict"].tolist(), [0, 1])
+        self.assertGreater(result.loc[0, "query_title_coverage"], 0.5)
+
+    def test_empty_category_has_zero_depth(self):
+        self.assertEqual(compute_cat_depth(""), 0)
+        self.assertEqual(compute_cat_depth(None), 0)
 
 
 if __name__ == "__main__":

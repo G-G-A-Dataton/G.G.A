@@ -188,6 +188,25 @@ def add_item_text_column(items_df, include_attrs=True, col_name="item_text"):
     return out
 
 
+def build_item_texts(items_df, include_attrs=True):
+    """Build standardized item texts without copying the source DataFrame."""
+    required = {"title", "brand", "category"}
+    missing = sorted(required - set(items_df.columns))
+    if missing:
+        raise ValueError(f"Item text input is missing required columns: {missing}")
+    attributes = (
+        items_df["attributes"]
+        if "attributes" in items_df.columns
+        else [""] * len(items_df)
+    )
+    return [
+        _combine_item_text(title, brand, category, attribute, include_attrs)
+        for title, brand, category, attribute in zip(
+            items_df["title"], items_df["brand"], items_df["category"], attributes
+        )
+    ]
+
+
 def build_query_text(row):
     """
     Sorgu (term) satırından standart metin üretir.
@@ -232,12 +251,12 @@ def build_all_texts(terms_df, items_df, include_attrs=True):
         (query_texts, item_texts) — sıra terms/items DataFrame ile aynı
     """
     print("[item_text] Sorgu metinleri hazirlaniyor...")
-    query_texts = terms_df.apply(build_query_text, axis=1).tolist()
+    if "query" not in terms_df.columns:
+        raise ValueError("terms_df must contain query")
+    query_texts = [clean_text(query) for query in terms_df["query"]]
 
     print("[item_text] Urun metinleri hazirlaniyor...")
-    item_texts = items_df.apply(
-        lambda r: build_item_text(r, include_attrs=include_attrs), axis=1
-    ).tolist()
+    item_texts = build_item_texts(items_df, include_attrs=include_attrs)
 
     return query_texts, item_texts
 
