@@ -26,6 +26,9 @@ EXPECTED_POSITIVE_ROWS = 250_000
 EXPECTED_TRAINING_ROWS = 1_877_700
 EXPECTED_TRAINING_TERMS = 17_968
 EXPECTED_TEST_ROWS = 3_359_679
+PRODUCTION_NUM_BOOST_ROUND = 2_000
+PRODUCTION_EARLY_STOPPING_ROUNDS = 150
+PRODUCTION_MODEL_THREADS = 8
 PRODUCTION_CANDIDATE_SAMPLING = {
     "strategy": "test_shaped_bm25_category_random",
     "min_candidates": 100,
@@ -157,8 +160,16 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
     }
     if manifest.get("validation") != expected_validation:
         errors.append("OOF predictions are not cross-fitted by term_id")
-    if not _valid_model_training(manifest.get("model_training")):
+    model_training = manifest.get("model_training")
+    if not _valid_model_training(model_training):
         errors.append("model training configuration contract mismatch")
+    if require_full and (
+        not isinstance(model_training, dict)
+        or model_training.get("num_boost_round") != PRODUCTION_NUM_BOOST_ROUND
+        or model_training.get("early_stopping_rounds")
+        != PRODUCTION_EARLY_STOPPING_ROUNDS
+    ):
+        errors.append("full artifacts require the production boosting budget")
     if prediction_files != OOF_FILENAMES:
         errors.append("OOF prediction file contract mismatch")
     if (
@@ -291,7 +302,10 @@ def _valid_model_training(config):
         for field in positive_integer_fields
     ):
         return False
-    if config["n_splits"] != 5 or config["model_threads"] != 8:
+    if (
+        config["n_splits"] != 5
+        or config["model_threads"] != PRODUCTION_MODEL_THREADS
+    ):
         return False
     lightgbm_params = config.get("lightgbm_params")
     xgboost_params = config.get("xgboost_params")
@@ -300,10 +314,10 @@ def _valid_model_training(config):
         or not isinstance(xgboost_params, dict)
         or lightgbm_params.get("objective") != "binary"
         or lightgbm_params.get("seed") != 42
-        or lightgbm_params.get("num_threads") != 8
+        or lightgbm_params.get("num_threads") != PRODUCTION_MODEL_THREADS
         or xgboost_params.get("objective") != "binary:logistic"
         or xgboost_params.get("seed") != 42
-        or xgboost_params.get("nthread") != 8
+        or xgboost_params.get("nthread") != PRODUCTION_MODEL_THREADS
     ):
         return False
     folds = config.get("folds")

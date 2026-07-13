@@ -15,6 +15,8 @@ from src.oof_artifacts import (
     EXPECTED_TRAINING_ROWS,
     EXPECTED_TRAINING_TERMS,
     OOF_FILENAMES,
+    PRODUCTION_EARLY_STOPPING_ROUNDS,
+    PRODUCTION_NUM_BOOST_ROUND,
     load_oof_artifacts,
     validate_oof_artifacts,
     write_oof_manifest,
@@ -78,8 +80,12 @@ class OofArtifactContractTests(unittest.TestCase):
             training_config={
                 "random_seed": 42,
                 "n_splits": 5,
-                "num_boost_round": 200,
-                "early_stopping_rounds": 30,
+                "num_boost_round": (
+                    PRODUCTION_NUM_BOOST_ROUND if is_full else 200
+                ),
+                "early_stopping_rounds": (
+                    PRODUCTION_EARLY_STOPPING_ROUNDS if is_full else 30
+                ),
                 "model_threads": 8,
                 "lightgbm_params": {
                     "objective": "binary",

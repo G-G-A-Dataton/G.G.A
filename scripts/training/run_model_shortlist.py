@@ -30,7 +30,13 @@ from src.modeling import (
     cross_fitted_ensemble_evaluation,
     cross_fitted_threshold_evaluation,
 )
-from src.oof_artifacts import EXPECTED_TEST_ROWS, write_oof_manifest
+from src.oof_artifacts import (
+    EXPECTED_TEST_ROWS,
+    PRODUCTION_EARLY_STOPPING_ROUNDS,
+    PRODUCTION_MODEL_THREADS,
+    PRODUCTION_NUM_BOOST_ROUND,
+    write_oof_manifest,
+)
 from src.out_of_core_features import (
     build_base_feature_store,
     build_context_feature_store,
@@ -49,7 +55,7 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 PRODUCTION_ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
 RANDOM_SEED = 42
 N_SPLITS = 5
-MODEL_THREADS = 8
+MODEL_THREADS = PRODUCTION_MODEL_THREADS
 BM25_HARD_FRACTION = 0.20
 CATEGORY_HARD_FRACTION = 0.50
 BM25_TOP_N = 200
@@ -95,8 +101,14 @@ def parse_args(argv=None):
     )
     parser.add_argument("--test-sample", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=100_000)
-    parser.add_argument("--num-boost-round", type=int, default=1_200)
-    parser.add_argument("--early-stopping-rounds", type=int, default=80)
+    parser.add_argument(
+        "--num-boost-round", type=int, default=PRODUCTION_NUM_BOOST_ROUND
+    )
+    parser.add_argument(
+        "--early-stopping-rounds",
+        type=int,
+        default=PRODUCTION_EARLY_STOPPING_ROUNDS,
+    )
     parser.add_argument(
         "--bm25-hard-fraction", type=float, default=BM25_HARD_FRACTION
     )
@@ -214,11 +226,18 @@ def _train_oof(data, args, artifact_dir):
         lgb_model = lgb.train(
             LGBM_PARAMS,
             lgb_train,
-            num_boost_round=getattr(args, "num_boost_round", 1_200),
+            num_boost_round=getattr(
+                args, "num_boost_round", PRODUCTION_NUM_BOOST_ROUND
+            ),
             valid_sets=[lgb_validation],
             callbacks=[
                 lgb.early_stopping(
-                    getattr(args, "early_stopping_rounds", 80), verbose=False
+                    getattr(
+                        args,
+                        "early_stopping_rounds",
+                        PRODUCTION_EARLY_STOPPING_ROUNDS,
+                    ),
+                    verbose=False,
                 ),
                 lgb.log_evaluation(period=0),
             ],
@@ -241,9 +260,15 @@ def _train_oof(data, args, artifact_dir):
         xgb_model = xgb.train(
             XGB_PARAMS,
             xgb_train,
-            num_boost_round=getattr(args, "num_boost_round", 1_200),
+            num_boost_round=getattr(
+                args, "num_boost_round", PRODUCTION_NUM_BOOST_ROUND
+            ),
             evals=[(xgb_validation, "validation")],
-            early_stopping_rounds=getattr(args, "early_stopping_rounds", 80),
+            early_stopping_rounds=getattr(
+                args,
+                "early_stopping_rounds",
+                PRODUCTION_EARLY_STOPPING_ROUNDS,
+            ),
             verbose_eval=False,
         )
         oof_xgb[validation_index] = _xgb_predict(xgb_model, xgb_validation)
@@ -345,6 +370,16 @@ def main(argv=None):
         raise ValueError("--test-sample must be positive")
     if getattr(args, "batch_size", 1) <= 0:
         raise ValueError("--batch-size must be positive")
+    if (
+        getattr(args, "num_boost_round", PRODUCTION_NUM_BOOST_ROUND) <= 0
+        or getattr(
+            args,
+            "early_stopping_rounds",
+            PRODUCTION_EARLY_STOPPING_ROUNDS,
+        )
+        <= 0
+    ):
+        raise ValueError("boosting and early-stopping rounds must be positive")
     artifact_dir = os.path.abspath(
         getattr(args, "artifact_dir", None)
         or (
@@ -437,8 +472,14 @@ def main(argv=None):
         training_config={
             "random_seed": RANDOM_SEED,
             "n_splits": N_SPLITS,
-            "num_boost_round": getattr(args, "num_boost_round", 1_200),
-            "early_stopping_rounds": getattr(args, "early_stopping_rounds", 80),
+            "num_boost_round": getattr(
+                args, "num_boost_round", PRODUCTION_NUM_BOOST_ROUND
+            ),
+            "early_stopping_rounds": getattr(
+                args,
+                "early_stopping_rounds",
+                PRODUCTION_EARLY_STOPPING_ROUNDS,
+            ),
             "model_threads": MODEL_THREADS,
             "lightgbm_params": LGBM_PARAMS,
             "xgboost_params": XGB_PARAMS,
