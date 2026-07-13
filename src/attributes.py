@@ -7,8 +7,9 @@ Muhammed Köseoğlu ve Ahmet Emin Işın tarafından hazırlanmıştır.
 8 Temmuz: Renk, materyal ve beden parse modülü
 
 Neden attributes parse?
-  items.csv'deki 'attributes' kolonu JSON-benzeri yapılandırılmış metin içerir.
-  Örnek: "{'Renk': 'Siyah', 'Materyal': 'Deri', 'Numara': '42'}"
+  items.csv'deki 'attributes' kolonu çoğunlukla virgülle ayrılmış
+  "anahtar: değer" metni, bazı kaynaklarda ise dict/JSON metni içerir.
+  Örnek: "renk: siyah, materyal: deri, numara: 42"
   Bu bilgiler başlıkta (title) yer almayabilir ama kullanıcının sorgusunda geçebilir.
   Örnek: "siyah deri erkek ayakkabı 42 numara" → renk, materyal ve beden eşleşmesi
   güçlü bir pozitif sinyal verir.
@@ -23,15 +24,29 @@ Neden attributes parse?
   - query_material_match : Sorguda materyal var ve ürünün materyaliyle uyuşuyor mu?
 """
 
-import re
 import ast
-import pandas as pd
-import numpy as np
+import json
+import re
+
+from src.text_utils import find_phrase_values, first_phrase_value
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Attributes JSON Parsing
 # ─────────────────────────────────────────────────────────────────────────────
+
+_FLAT_ATTRIBUTE_PATTERN = re.compile(
+    r"(?:^|,\s*)([^,:]+?)\s*:\s*(.*?)(?=,\s*[^,:]+?\s*:|$)"
+)
+
+
+def _normalize_attribute_dict(attributes):
+    return {
+        str(key).casefold().strip(): str(value).casefold().strip()
+        for key, value in attributes.items()
+        if str(key).strip()
+    }
+
 
 def parse_attributes(attributes_str):
     """
@@ -40,6 +55,7 @@ def parse_attributes(attributes_str):
     Attributes kolonu birkaç farklı formatta gelebilir:
       - "{'Renk': 'Siyah', 'Materyal': 'Deri'}"  (Python dict string)
       - '{"Renk": "Siyah"}'                       (JSON string)
+      - "renk: siyah, materyal: deri"              (katalogdaki düz format)
       - NaN / boş string                           (bilgi yok)
 
     Tüm bu durumları güvenli şekilde ele alır — hata fırlatmaz.
@@ -52,16 +68,26 @@ def parse_attributes(attributes_str):
     if not isinstance(attributes_str, str) or not attributes_str.strip():
         return {}
 
-    # Tek tırnak kullanılmış Python dict formatı → ast.literal_eval ile çözülebilir
-    try:
-        result = ast.literal_eval(attributes_str)
-        if isinstance(result, dict):
-            # Tüm anahtar ve değerleri küçük harfe çevir — büyük/küçük harf duyarsız eşleşme için
-            return {str(k).lower().strip(): str(v).lower().strip() for k, v in result.items()}
-    except (ValueError, SyntaxError):
-        pass
+    value = attributes_str.strip()
+    if value.startswith("{") and value.endswith("}"):
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                result = parser(value)
+            except (ValueError, SyntaxError, TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(result, dict):
+                return _normalize_attribute_dict(result)
 
-    return {}
+    pairs = _FLAT_ATTRIBUTE_PATTERN.findall(value)
+    return _normalize_attribute_dict(dict(pairs)) if pairs else {}
+
+
+def _get_parsed_attribute_value(parsed, *keys):
+    for key in keys:
+        value = parsed.get(key.casefold().strip())
+        if value is not None:
+            return value
+    return ""
 
 
 def get_attribute_value(attributes_str, *keys):
@@ -79,12 +105,7 @@ def get_attribute_value(attributes_str, *keys):
     str
         Bulunan değer (küçük harf). Bulunamazsa "".
     """
-    parsed = parse_attributes(attributes_str)
-    for key in keys:
-        key_lower = key.lower().strip()
-        if key_lower in parsed:
-            return parsed[key_lower]
-    return ""
+    return _get_parsed_attribute_value(parse_attributes(attributes_str), *keys)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,7 +114,7 @@ def get_attribute_value(attributes_str, *keys):
 
 # Türkçe ve İngilizce temel renkler + yaygın varyasyonlar
 _COLORS_TR = {
-    "siyah": ["siyah", "black", "koyu", "karanlık"],
+    "siyah": ["siyah", "black"],
     "beyaz": ["beyaz", "white", "krem", "ekru", "kırık beyaz"],
     "kırmızı": ["kırmızı", "kirmizi", "red", "bordo", "şarap", "sarap"],
     "mavi": ["mavi", "blue", "lacivert", "indigo", "navy", "deniz mavisi"],
@@ -114,6 +135,22 @@ for canonical, variants in _COLORS_TR.items():
         _ALL_COLOR_KEYWORDS[v] = canonical
 
 
+def _normalize_color(raw):
+    if not raw:
+        return ""
+    raw_normalized = raw.casefold()
+    return first_phrase_value(
+        raw_normalized, _ALL_COLOR_KEYWORDS, default=raw_normalized
+    )
+
+
+def _parse_color_from_dict(parsed):
+    raw = _get_parsed_attribute_value(
+        parsed, "renk", "color", "colour", "ana renk", "primary color"
+    )
+    return _normalize_color(raw)
+
+
 def parse_color(attributes_str):
     """
     Attributes string'inden renk bilgisini çıkarır.
@@ -123,16 +160,7 @@ def parse_color(attributes_str):
     str
         Normalize edilmiş renk adı (örn. "siyah"). Bulunamazsa "".
     """
-    raw = get_attribute_value(attributes_str, "renk", "color", "colour", "ana renk", "primary color")
-    if not raw:
-        return ""
-    # Renk değerini bilinen renklerden biriyle eşleştir
-    raw_lower = raw.lower()
-    for keyword, canonical in _ALL_COLOR_KEYWORDS.items():
-        if keyword in raw_lower:
-            return canonical
-    # Eşleşme yoksa ham değeri döndür (bilgi kaybını önlemek için)
-    return raw_lower
+    return _parse_color_from_dict(parse_attributes(attributes_str))
 
 
 def extract_query_colors(query):
@@ -143,12 +171,7 @@ def extract_query_colors(query):
     """
     if not isinstance(query, str):
         return set()
-    query_lower = query.lower()
-    found = set()
-    for keyword, canonical in _ALL_COLOR_KEYWORDS.items():
-        if keyword in query_lower:
-            found.add(canonical)
-    return found
+    return find_phrase_values(query, _ALL_COLOR_KEYWORDS)
 
 
 def compute_color_match(query, attributes_str):
@@ -204,6 +227,25 @@ _SIZE_PATTERNS = [
 _SIZE_LETTERS = {"xs", "s", "m", "l", "xl", "xxl", "xxxl", "2xl", "3xl"}
 
 
+def _normalize_size(raw):
+    if not raw:
+        return ""
+    raw_normalized = raw.casefold().strip()
+    if raw_normalized in _SIZE_LETTERS:
+        return raw_normalized
+    match = re.search(r"(\d{1,3}[.,]?\d?)", raw_normalized)
+    return match.group(1).replace(",", ".") if match else raw_normalized
+
+
+def _parse_size_from_dict(parsed):
+    raw = _get_parsed_attribute_value(
+        parsed,
+        "beden", "numara", "size", "no", "ayakkabı numarası",
+        "beden/numara", "elbise bedeni", "pantolon bedeni",
+    )
+    return _normalize_size(raw)
+
+
 def parse_size(attributes_str):
     """
     Attributes string'inden beden/numara bilgisini çıkarır.
@@ -213,25 +255,7 @@ def parse_size(attributes_str):
     str
         Normalize edilmiş beden (örn. "42", "m", "xl"). Bulunamazsa "".
     """
-    raw = get_attribute_value(
-        attributes_str,
-        "beden", "numara", "size", "no", "ayakkabı numarası",
-        "beden/numara", "elbise bedeni", "pantolon bedeni"
-    )
-    if not raw:
-        return ""
-
-    # Harf beden mi?
-    raw_lower = raw.lower().strip()
-    if raw_lower in _SIZE_LETTERS:
-        return raw_lower
-
-    # Sayısal numara? (40, 41, 42, 38.5 gibi)
-    match = re.search(r"(\d{1,3}[.,]?\d?)", raw_lower)
-    if match:
-        return match.group(1).replace(",", ".")
-
-    return raw_lower
+    return _parse_size_from_dict(parse_attributes(attributes_str))
 
 
 def extract_query_sizes(query):
@@ -300,7 +324,7 @@ def compute_size_match(query, attributes_str):
 _MATERIALS = {
     "deri": ["deri", "leather", "nubuk", "süet", "suede", "nappa"],
     "kumaş": ["kumaş", "fabric", "tekstil", "dokuma"],
-    "pamuk": ["pamuk", "cotton", "viskon", "viscose"],
+    "pamuk": ["pamuk", "pamuklu", "cotton", "viskon", "viscose"],
     "polyester": ["polyester", "polyamid", "naylon", "nylon", "sentetik"],
     "yün": ["yün", "wool", "kaşmir", "cashmere", "angora"],
     "keten": ["keten", "linen"],
@@ -314,6 +338,23 @@ for canonical, variants in _MATERIALS.items():
         _ALL_MATERIAL_KEYWORDS[v] = canonical
 
 
+def _normalize_material(raw):
+    if not raw:
+        return ""
+    raw_normalized = raw.casefold()
+    return first_phrase_value(
+        raw_normalized, _ALL_MATERIAL_KEYWORDS, default=raw_normalized
+    )
+
+
+def _parse_material_from_dict(parsed):
+    raw = _get_parsed_attribute_value(
+        parsed,
+        "materyal", "kumaş", "material", "fabric", "ana madde", "dış malzeme",
+    )
+    return _normalize_material(raw)
+
+
 def parse_material(attributes_str):
     """
     Attributes string'inden materyal/kumaş bilgisini çıkarır.
@@ -323,19 +364,7 @@ def parse_material(attributes_str):
     str
         Normalize edilmiş materyal (örn. "deri", "pamuk"). Bulunamazsa "".
     """
-    raw = get_attribute_value(
-        attributes_str,
-        "materyal", "kumaş", "material", "fabric", "ana madde", "dış malzeme"
-    )
-    if not raw:
-        return ""
-
-    raw_lower = raw.lower()
-    for keyword, canonical in _ALL_MATERIAL_KEYWORDS.items():
-        if keyword in raw_lower:
-            return canonical
-
-    return raw_lower
+    return _parse_material_from_dict(parse_attributes(attributes_str))
 
 
 def extract_query_materials(query):
@@ -346,12 +375,7 @@ def extract_query_materials(query):
     """
     if not isinstance(query, str):
         return set()
-    query_lower = query.lower()
-    found = set()
-    for keyword, canonical in _ALL_MATERIAL_KEYWORDS.items():
-        if keyword in query_lower:
-            found.add(canonical)
-    return found
+    return find_phrase_values(query, _ALL_MATERIAL_KEYWORDS)
 
 
 def compute_material_match(query, attributes_str):
@@ -383,7 +407,7 @@ def compute_material_match(query, attributes_str):
 # 5. Ana Feature Builder (features.py ile entegrasyon için)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def add_attribute_features(df):
+def add_attribute_features(df, verbose=True, copy=True):
     """
     Birleştirilmiş DataFrame'e attributes tabanlı feature'ları ekler.
 
@@ -406,28 +430,70 @@ def add_attribute_features(df):
     pd.DataFrame
         Orijinal DataFrame'e 3 yeni kolon eklenmiş hali.
     """
-    out = df.copy()
+    out = df.copy() if copy else df
 
     # 'attributes' kolonu yoksa (bazı eski scriptlerde eksik olabilir) boş string kullan
     if "attributes" not in out.columns:
         out["attributes"] = ""
 
-    print("[attributes] query_color_match hesaplanıyor...")
-    out["query_color_match"] = out.apply(
-        lambda r: compute_color_match(r["query"], r.get("attributes", "")), axis=1
-    )
+    queries = out["query"].tolist()
 
-    print("[attributes] query_size_match hesaplanıyor...")
-    out["query_size_match"] = out.apply(
-        lambda r: compute_size_match(r["query"], r.get("attributes", "")), axis=1
-    )
+    query_cache = {}
+    query_values = []
+    for query in queries:
+        key = query if isinstance(query, str) else None
+        if key not in query_cache:
+            query_cache[key] = (
+                extract_query_colors(query),
+                extract_query_sizes(query),
+                extract_query_materials(query),
+            )
+        query_values.append(query_cache[key])
 
-    print("[attributes] query_material_match hesaplanıyor...")
-    out["query_material_match"] = out.apply(
-        lambda r: compute_material_match(r["query"], r.get("attributes", "")), axis=1
-    )
+    item_ids = out["item_id"] if "item_id" in out.columns else out["attributes"]
+    item_cache = {}
+    item_values = []
+    for item_id, attributes in zip(item_ids, out["attributes"]):
+        key = item_id if isinstance(item_id, str) else (
+            attributes if isinstance(attributes, str) else None
+        )
+        if key not in item_cache:
+            parsed = parse_attributes(attributes)
+            item_cache[key] = (
+                _parse_color_from_dict(parsed),
+                _parse_size_from_dict(parsed),
+                _parse_material_from_dict(parsed),
+            )
+        item_values.append(item_cache[key])
 
-    print("[attributes] Attribute feature'ları hesaplandı.")
+    def match(query_values, item_value):
+        if not query_values or not item_value:
+            return 0
+        return 1 if item_value in query_values else -1
+
+    if verbose:
+        print("[attributes] query_color_match hesaplanıyor...")
+    out["query_color_match"] = [
+        match(query_value[0], item_value[0])
+        for query_value, item_value in zip(query_values, item_values)
+    ]
+
+    if verbose:
+        print("[attributes] query_size_match hesaplanıyor...")
+    out["query_size_match"] = [
+        match(query_value[1], item_value[1])
+        for query_value, item_value in zip(query_values, item_values)
+    ]
+
+    if verbose:
+        print("[attributes] query_material_match hesaplanıyor...")
+    out["query_material_match"] = [
+        match(query_value[2], item_value[2])
+        for query_value, item_value in zip(query_values, item_values)
+    ]
+
+    if verbose:
+        print("[attributes] Attribute feature'ları hesaplandı.")
     return out
 
 

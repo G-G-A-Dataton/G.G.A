@@ -1,8 +1,15 @@
 # Deney Matrisi v2 (11 Temmuz)
 
+> [!CAUTION]
+> **Historical, invalidated matrix.** These scores used row-level CV and the old
+> sampling/attribute contracts. Rerun the matrix with grouped validation before
+> selecting a ratio or feature set.
+> Current runner: `python scripts/analysis/run_deney_matrisi_v2.py`; new results
+> are written to `docs/experiment_matrix_v2.md`.
+
 **Hazırlayan:** Ömer Faruk Kara  
 **Tarih:** 11 Temmuz 2026  
-**Yöntem:** 5-Fold Stratified CV, seed=42  
+**Yöntem:** Legacy 5-Fold row-level Stratified CV, seed=42 (invalidated)
 **Pozitif örnek:** 2,000
 
 ## Eksenler

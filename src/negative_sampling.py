@@ -32,6 +32,8 @@ def generate_random_negatives(
     ratio: int = 1,
     random_state: int = 42,
     verbose: bool = True,
+    positive_reference_df: Optional[pd.DataFrame] = None,
+    excluded_pairs_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Her pozitif (term_id, item_id) çifti için rastgele 'ratio' kadar negatif üretir.
@@ -58,12 +60,44 @@ def generate_random_negatives(
         Rastgele sayı üreteci tohumu. Aynı seed → aynı çıktı (tekrar üretilebilirlik).
     verbose : bool, default=True
         İlerleme bilgisi yazdır.
+    positive_reference_df : pd.DataFrame, optional
+        Negatiflerden dışlanacak tüm bilinen pozitif çiftler. `train_df` bir
+        örneklem ise tam `training_pairs.csv` burada verilmelidir.
+    excluded_pairs_df : pd.DataFrame, optional
+        BM25 gibi başka bir üreticinin seçtiği ve tekrar seçilmemesi gereken
+        çiftler.
 
     Döndürür
     -------
     pd.DataFrame
         Kolonlar: term_id, item_id, label (hepsi 0)
     """
+    if not isinstance(ratio, int) or ratio <= 0:
+        raise ValueError(f"ratio must be a positive integer, got {ratio}")
+    required_columns = {"term_id", "item_id"}
+    if not required_columns.issubset(train_df.columns):
+        raise ValueError(f"train_df must contain {sorted(required_columns)}")
+    if train_df.empty:
+        return pd.DataFrame(columns=["term_id", "item_id", "label"])
+    if "item_id" not in items_df.columns:
+        raise ValueError("items_df must contain item_id")
+    if train_df["term_id"].isna().any():
+        raise ValueError("train_df contains null term_id values")
+    if items_df.empty or items_df["item_id"].isna().any():
+        raise ValueError("items_df must contain non-null catalog items")
+    if items_df["item_id"].duplicated().any():
+        raise ValueError("items_df contains duplicate item_id values")
+
+    positive_reference_df = (
+        train_df if positive_reference_df is None else positive_reference_df
+    )
+    if not required_columns.issubset(positive_reference_df.columns):
+        raise ValueError(
+            f"positive_reference_df must contain {sorted(required_columns)}"
+        )
+    if positive_reference_df[list(required_columns)].isna().any().any():
+        raise ValueError("positive_reference_df contains null pair values")
+
     # NOT (performans): Önceki sürüm her term için `[x for x in all_item_ids
     # if x not in pos_set]` ile TÜM katalogu Python döngüsünde tarıyordu.
     # Bu, term sayısı x katalog boyutu kadar işlem demek (gerçek veride
@@ -76,7 +110,25 @@ def generate_random_negatives(
     rng = np.random.default_rng(random_state)
     all_item_ids = items_df["item_id"].to_numpy()
 
-    pozitif_anahtarlar = set(train_df["term_id"] + "|" + train_df["item_id"])
+    separator = "\x1f"
+    positive_keys = set(
+        positive_reference_df["term_id"].astype(str)
+        + separator
+        + positive_reference_df["item_id"].astype(str)
+    )
+    excluded_keys = set()
+    if excluded_pairs_df is not None and not excluded_pairs_df.empty:
+        if not required_columns.issubset(excluded_pairs_df.columns):
+            raise ValueError(
+                f"excluded_pairs_df must contain {sorted(required_columns)}"
+            )
+        if excluded_pairs_df[list(required_columns)].isna().any().any():
+            raise ValueError("excluded_pairs_df contains null pair values")
+        excluded_keys.update(
+            excluded_pairs_df["term_id"].astype(str)
+            + separator
+            + excluded_pairs_df["item_id"].astype(str)
+        )
 
     # Her pozitif çiftin term'ini 'ratio' kez tekrarla → term ağırlığı
     # pozitiflerdeki ile aynı kalır (bir term'in 10 pozitifi varsa 10*ratio
@@ -84,8 +136,28 @@ def generate_random_negatives(
     uretilecek_termler = np.repeat(train_df["term_id"].to_numpy(), ratio)
     hedef = len(uretilecek_termler)
 
+    required_by_term = pd.Series(uretilecek_termler).value_counts()
+    blocked_parts = [positive_reference_df[["term_id", "item_id"]]]
+    if excluded_pairs_df is not None and not excluded_pairs_df.empty:
+        blocked_parts.append(excluded_pairs_df[["term_id", "item_id"]])
+    blocked_pairs = pd.concat(blocked_parts, ignore_index=True).drop_duplicates()
+    blocked_pairs = blocked_pairs[
+        blocked_pairs["item_id"].isin(items_df["item_id"])
+    ]
+    blocked_count_by_term = blocked_pairs.groupby("term_id")["item_id"].nunique()
+    available_by_term = (
+        len(all_item_ids)
+        - blocked_count_by_term.reindex(required_by_term.index, fill_value=0)
+    )
+    impossible = required_by_term[required_by_term > available_by_term]
+    if not impossible.empty:
+        raise ValueError(
+            "Not enough unique catalog items for negative quotas: "
+            f"{impossible.head().to_dict()}"
+        )
+
     kabul_edilenler = []
-    kabul_anahtarlari = set()
+    accepted_keys = set()
     tur = 0
 
     while len(uretilecek_termler) > 0:
@@ -94,15 +166,20 @@ def generate_random_negatives(
             "term_id": uretilecek_termler,
             "item_id": rng.choice(all_item_ids, size=len(uretilecek_termler)),
         })
-        anahtar = adaylar["term_id"] + "|" + adaylar["item_id"]
+        anahtar = (
+            adaylar["term_id"].astype(str)
+            + separator
+            + adaylar["item_id"].astype(str)
+        )
 
         gecerli = (
-            ~anahtar.isin(pozitif_anahtarlar)   # pozitifle çakışmıyor
-            & ~anahtar.isin(kabul_anahtarlari)  # önceki turlarla tekrar değil
+            ~anahtar.isin(positive_keys)        # pozitifle çakışmıyor
+            & ~anahtar.isin(excluded_keys)      # BM25 vb. seçimlerle çakışmıyor
+            & ~anahtar.isin(accepted_keys)      # önceki turlarla tekrar değil
             & ~anahtar.duplicated()             # bu tur içinde tekrar değil
         )
         kabul_edilenler.append(adaylar[gecerli])
-        kabul_anahtarlari.update(anahtar[gecerli])
+        accepted_keys.update(anahtar[gecerli])
 
         if verbose:
             print(f"  [negative_sampling] tur {tur}: {gecerli.sum():,} kabul, "
@@ -111,7 +188,10 @@ def generate_random_negatives(
         uretilecek_termler = adaylar.loc[~gecerli, "term_id"].to_numpy()
 
     negatives = pd.concat(kabul_edilenler, ignore_index=True)
-    assert len(negatives) == hedef, "Uretilen negatif sayisi beklenenden farkli!"
+    if len(negatives) != hedef:
+        raise RuntimeError(
+            f"Negative quota mismatch: expected {hedef}, got {len(negatives)}"
+        )
     negatives["label"] = 0
 
     if verbose:
@@ -130,6 +210,7 @@ def build_training_set(
     ratio: int = 3,
     random_state: int = 42,
     verbose: bool = True,
+    positive_reference_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Pozitif çiftlere negatif örnekleri ekleyerek tam eğitim seti oluşturur.
@@ -144,6 +225,8 @@ def build_training_set(
         Her pozitife kaç negatif üretileceği.
     random_state : int, default=42
         Tekrar üretilebilirlik için seed.
+    positive_reference_df : pd.DataFrame, optional
+        Negatiflerden dışlanacak tüm bilinen pozitif çiftler.
 
     Döndürür
     -------
@@ -158,7 +241,8 @@ def build_training_set(
     # Negatif örnekleri üret
     negatives_df = generate_random_negatives(
         train_df, items_df, ratio=ratio,
-        random_state=random_state, verbose=verbose
+        random_state=random_state, verbose=verbose,
+        positive_reference_df=positive_reference_df,
     )
 
     # Pozitif çiftlere label=1 ekle (eğer yoksa)
@@ -228,7 +312,8 @@ def generate_ratio_experiments(
         print(f"\n--- Ratio {ratio}:1 ---")
         dataset = build_training_set(
             sample_train, items_df, ratio=ratio,
-            random_state=random_state, verbose=True
+            random_state=random_state, verbose=True,
+            positive_reference_df=train_df,
         )
         results[ratio] = dataset
 

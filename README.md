@@ -25,11 +25,11 @@ Bir kullanıcının arama terimi (query) ile bir ürün (item) arasında **alaka
 
 | Dosya | Satır Sayısı | Açıklama |
 |---|---|---|
-| `items.csv` | ~966K | Ürün kataloğu (title, category, brand, gender, age_group, attributes) |
-| `terms.csv` | ~50K | Arama terimleri (term_id, query) |
-| `training_pairs.csv` | ~250K | Eğitim çiftleri — sadece label=1 |
-| `submission_pairs.csv` | ~3.36M | Tahmin edilecek çiftler |
-| `sample_submission.csv` | ~3.36M | Gönderim formatı örneği |
+| `items.csv` | 962,873 | Ürün kataloğu (title, category, brand, gender, age_group, attributes) |
+| `terms.csv` | 50,153 | Arama terimleri (term_id, query) |
+| `training_pairs.csv` | 250,000 | Eğitim çiftleri — sadece label=1 |
+| `submission_pairs.csv` | 3,359,679 | Tahmin edilecek çiftler |
+| `sample_submission.csv` | 3,359,679 | Gönderim formatı örneği |
 
 ---
 
@@ -44,8 +44,14 @@ G.G.A/
 │   └── submission_pairs.csv
 ├── src/                         # Üretim (Production) modülleri
 │   ├── data.py                  # Bellek dostu veri yükleme
-│   ├── features.py              # 15 feature üretimi (metin, demografik, kategori, attr)
-│   ├── metrics.py               # Macro-F1, threshold tarama, Stratified K-Fold
+│   ├── features.py              # 23 lexical/demographic/category/attribute features
+│   ├── context_features.py      # 9 candidate-relative rank/gap features
+│   ├── candidate_sampling.py    # Test-shaped, leakage-free candidate generation
+│   ├── modeling.py              # Shared grouped OOF/threshold/ensemble contracts
+│   ├── oof_artifacts.py         # Hash-verified shortlist artifact contract
+│   ├── out_of_core_features.py  # Global context features with bounded RAM
+│   ├── data_freeze.py           # Frozen source-data verifier
+│   ├── metrics.py               # Macro-F1, threshold, term_id gruplu CV
 │   ├── negative_sampling.py     # Random & BM25 hard negative üretimi
 │   ├── bm25_hard_negative.py    # BM25 hard negative örnekleyici
 │   ├── attributes.py            # Renk/beden/materyal attribute parse
@@ -60,17 +66,15 @@ G.G.A/
 │   └── error_analysis.py        # FP/FN hata analizi
 ├── scripts/                     # Çalıştırılabilir scriptler
 │   ├── training/                # Model eğitimi
-│   │   ├── run_baseline.py          # LightGBM baseline (5-Fold CV)
-│   │   ├── run_baseline_tfidf.py    # TF-IDF özellikli baseline
-│   │   ├── run_lgbm_tuning.py       # Parametre tuning (EXP-008)
-│   │   ├── run_model_comparison.py  # LGBM vs XGBoost (EXP-009)
-│   │   └── run_train_full_v2.py     # Tam eğitim seti ile eğitim
+│   │   ├── run_model_shortlist.py   # Final LGBM/XGB grouped shortlist
+│   │   └── run_train_full_v2.py     # Single-LGBM fallback
 │   ├── analysis/                # Analiz & deney
 │   │   ├── run_feature_importance.py    # Feature importance (5-Fold gain)
-│   │   ├── run_threshold_analysis.py    # Optimal threshold taraması
+│   │   ├── run_threshold_analysis.py    # Verified OOF threshold diagnostics
 │   │   ├── run_deney_matrisi_v2.py      # 4x4 oran × feature seti deneyi
-│   │   ├── run_ensemble_comparison.py   # LGBM + XGB ensemble karşılaştırma
-│   │   └── run_hata_taksonomisi.py      # FP/FN hata sınıflandırma
+│   │   ├── run_ensemble_comparison.py   # Cross-fitted shortlist comparison
+│   │   ├── run_ensemble_optimization.py # Final model/weight/threshold selection
+│   │   └── run_hata_taksonomisi.py      # Fold-external error taxonomy
 │   ├── embedding/               # Embedding üretimi
 │   │   ├── run_term_embeddings.py           # Term embedding üretim runner
 │   │   └── run_embedding_score_comparison.py # Embedding cosine feature etkisi
@@ -84,10 +88,10 @@ G.G.A/
 ├── docs/                        # Dokümantasyon & raporlar
 │   ├── experiment_log.md            # Tüm deney geçmişi (EXP-001 → EXP-009)
 │   ├── feature_importance_raporu.md # Feature önem analizi (10 Temmuz)
-│   ├── threshold_analizi.md         # Optimal threshold raporu (11 Temmuz)
-│   ├── deney_matrisi_v2.md          # Oran × feature deney matrisi (11 Temmuz)
-│   ├── ensemble_karsilastirma.md    # Ensemble sonuçları (13 Temmuz)
-│   ├── hata_taksonomisi.md          # FP/FN sınıflandırma (12 Temmuz)
+│   ├── threshold_analysis.md        # Current threshold diagnostics (generated)
+│   ├── experiment_matrix_v2.md      # Current grouped ablation (generated)
+│   ├── ensemble_selection.md        # Final shortlist decision (generated)
+│   ├── error_taxonomy.md            # Current error taxonomy (generated)
 │   ├── embedding_skor_kiyasi.md     # Embedding cosine etkisi (12 Temmuz)
 │   ├── teknik_rapor_v1.md           # EDA & feature bulguları (10 Temmuz)
 │   ├── rapor_yontem_v1.md           # Yöntem bölümü (13 Temmuz)
@@ -114,31 +118,38 @@ G.G.A/
 
 ### Temel Akış (Hızlı Başlangıç)
 
+> Güncel model durumu ve eski deneylerin geçerlilik sınırı için
+> [`docs/model_status.md`](docs/model_status.md) belgesini okuyun.
+
 ```bash
-# 1. Veri pipeline doğrula
-python scripts/data/verify_pipeline.py
+# 1. Test, environment, frozen-data and relationship verification
+python scripts/run_production.py --stage verify
 
-# 2. Baseline model eğit
-python scripts/training/run_baseline.py
+# 2. LGBM/XGB shortlist artefaktlarını tam veriyle eğit
+python scripts/run_production.py --stage train
 
-# 3. Submission dosyası üret
-python scripts/training/run_train_full_v2.py
-python scripts/submission/run_full_submission_v2.py
+# 3. Cross-fitted model seçimiyle manifest doğrulamalı submission üret
+python scripts/run_production.py --stage predict
 ```
+
+Hızlı smoke eğitimleri doğrudan `run_model_shortlist.py --sample-terms ...`
+ile çalıştırılır, ayrı sample artefakt dizinine yazılır ve üretim seçimi
+tarafından kabul edilmez. Tam operasyon adımları için [`RUNBOOK.md`](RUNBOOK.md)
+kanonik kaynaktır.
+
+Varsayılan akış LightGBM, XGBoost ve weighted blend adaylarını karşılaştırır.
+Tekil LightGBM fallback'i yalnızca `--pipeline lightgbm` ile açıkça seçilir.
 
 ### Analiz Scriptleri
 
 ```bash
-# Feature önemi (hangi feature ne kadar önemli?)
-python scripts/analysis/run_feature_importance.py
-
-# Optimal threshold taraması
+# Hash doğrulamalı OOF threshold tanılaması
 python scripts/analysis/run_threshold_analysis.py
 
 # Negatif oran × feature kombinasyon deneyi (4×4 grid)
 python scripts/analysis/run_deney_matrisi_v2.py
 
-# LGBM vs XGBoost vs Ensemble
+# LGBM vs XGBoost vs weighted blend
 python scripts/analysis/run_ensemble_comparison.py
 
 # Hatalı tahminlerin sınıflandırılması
@@ -161,7 +172,7 @@ python scripts/embedding/run_embedding_score_comparison.py
 ### Veri & Kalite
 
 ```bash
-# Veri pipeline doğrulama
+python scripts/data/verify_data_freeze.py
 python scripts/data/verify_pipeline.py
 ```
 
@@ -171,7 +182,7 @@ python scripts/data/verify_pipeline.py
 
 ### Gereksinimler
 
-- **Python** 3.10+
+- **Python** 3.13.5 (see `.python-version`)
 - **Git LFS** (büyük veri dosyaları için)
 - GPU (opsiyonel, embedding hesaplama için önerilir)
 
@@ -201,7 +212,7 @@ pip install -r requirements.txt
 ### Adım 4: Kurulumu Doğrula
 
 ```bash
-python -c "import pandas, numpy, torch, sentence_transformers, lightgbm; print('✅ Tüm paketler başarıyla yüklendi!')"
+python scripts/verify_environment.py
 ```
 
 ### 📦 Temel Bağımlılıklar

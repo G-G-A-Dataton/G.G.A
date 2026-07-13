@@ -1,5 +1,9 @@
 # Sprint 1 Raporu — İlk 5 Gün Özeti (1-5 Temmuz 2026)
 
+> [!NOTE]
+> Historical sprint record. Its row-level CV scores and model recommendations
+> were invalidated by the current grouped validation and sampling contract.
+
 **Hazırlayan:** Ahmet Emin Işın (İletişim ve Rapor Sorumlusu)  
 **Tarih:** 5 Temmuz 2026  
 **Kapsam:** 1 Temmuz – 5 Temmuz 2026 (Sprint 1)
@@ -105,7 +109,7 @@
 | Negatif strateji | Random (ratio=3:1) |
 | Eğitim seti boyutu | 20.000 satır (5K poz + 15K neg) |
 | Feature sayısı | 7 (temel) |
-| Validation şeması | 5-Fold Stratified CV |
+| Validation şeması | Legacy 5-Fold row-level Stratified CV (invalidated) |
 | **Ort. Macro-F1** | **0.9613 ± 0.0013** |
 | En iyi threshold | 0.45 |
 | Optimized F1 | 0.9621 |
@@ -124,7 +128,7 @@
 src/
 ├── data.py              ✅ Bellek optimizasyonlu veri yükleme
 ├── features.py          ✅ 9 feature (7 temel + 2 demografik)
-├── metrics.py           ✅ Macro-F1 + Stratified KFold + threshold opt.
+├── metrics.py           ✅ Macro-F1 + StratifiedGroupKFold + threshold opt.
 ├── negative_sampling.py ✅ Sızıntısız random negative (1:1/3:1/5:1)
 ├── tfidf_features.py    ✅ TF-IDF cosine similarity (ayırıcılık: +0.37)
 ├── submission.py        ✅ Batch submission üretimi + ensemble

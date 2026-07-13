@@ -444,20 +444,22 @@ LightGBM nedir? Gradient Boosting tabanlı bir makine öğrenmesi modeli. Neden?
 
 ```python
 import lightgbm as lgb
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.metrics import f1_score
 import numpy as np
 
-def train_lgbm(X_train, y_train, feature_cols, n_splits=5):
+def train_lgbm(X_train, y_train, groups, feature_cols, n_splits=5):
     """
     5-fold cross-validation ile LightGBM eğit.
     """
     oof_preds = np.zeros(len(X_train))  # Out-of-fold tahminler
     models = []
     
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    skf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42)
     
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
+    for fold, (train_idx, val_idx) in enumerate(
+        skf.split(X_train, y_train, groups=groups)
+    ):
         print(f"\n--- Fold {fold+1}/{n_splits} ---")
         
         X_tr, X_val = X_train.iloc[train_idx], X_train.iloc[val_idx]
@@ -679,6 +681,8 @@ def get_embedding_similarity(pairs_df, item_embeddings, query_embeddings,
 ### Submission nasıl yapılır?
 
 ```python
+from pipeline.inference import load_threshold
+
 # 1. Submission pairs'e feature ekle
 sub_features = build_features(submission, items, terms)
 # + embedding similarity ekle
@@ -690,7 +694,7 @@ sub_preds_proba = np.mean([
 ], axis=0)
 
 # 3. En iyi threshold ile binary'e çevir
-best_thresh = 0.35  # validation'dan bulduğunuz değer
+best_thresh = load_threshold()  # grouped OOF eğitim artifact'ından
 sub_preds = (sub_preds_proba > best_thresh).astype(int)
 
 # 4. Submission dosyası oluştur

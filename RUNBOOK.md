@@ -1,88 +1,75 @@
-# Pipeline Çalıştırma Rehberi — Runbook v1 (14 Temmuz)
+# G.G.A Production Runbook
 
-**Hazırlayan:** Muhammed Köseoğlu  
-**Tarih:** 14 Temmuz 2026  
-**Sürüm:** v1.0.0  
-**Kapsam:** Tek Komutla Feature Üretim ve Prediction Akışı
+This is the canonical offline-capable workflow. Run commands from the repository root with `venv` activated.
 
----
-
-## 1. Genel Mimari ve Akış Diyagramı
-
-Runbook v1, ham veriden nihai teslim dosyasına (`submission.csv`) giden tüm süreci otomatikleştirir ve standartlaştırır.
-
-```mermaid
-graph TD
-    A[datasets/submission_pairs.csv] -->|1. Veri Yükleme| D[scripts/submission/run_pipeline.py]
-    B[datasets/terms.csv] -->|1. Veri Yükleme| D
-    C[datasets/items.csv] -->|1. Veri Yükleme| D
-    
-    D -->|2. Join & Feature Engineering| E[src/features.py]
-    D -->|3. TF-IDF Cosine| F[outputs/tfidf_vectorizer_v2.pkl]
-    
-    E -->|4. Batch Inference| G[outputs/lgbm_v2_fold_*.txt]
-    F -->|4. Batch Inference| G
-    
-    G -->|5. Post-Processing & TH=0.35| H[outputs/submission_v2.csv]
-    H -->|6. QA Kontrolü| I[validate_submission]
-```
-
----
-
-## 2. İlk Çalıştırma ve Hızlı Test Adımları
-
-Yarışma gününde akışın doğruluğunu test etmek için **10.000 satırlık hızlı örneklem modu** kullanılır:
+## 1. Acceptance Gate
 
 ```bash
-# 1. Proje kök dizinine gidin
-cd G.G.A
-
-# 2. Hızlı test modunda pipeline'ı çalıştırın
-python scripts/submission/run_pipeline.py --mode predict --sample 10000 --batch-size 5000
+python scripts/run_production.py --stage verify
 ```
 
----
+The gate runs 78 regression tests, verifies every pinned package, checks the versioned data freeze in `configs/final_v1.json`, and validates all CSV relationships. Any mismatch stops the run.
 
-## 3. Üretim (Production) Çalıştırma Adımları
-
-Tam 3.36 milyon satırlık test seti üzerinde tahmini başlatmak için:
+## 2. Production Training
 
 ```bash
-# Bellek durumunuza göre batch-size belirleyerek (varsayılan: 100.000) çalıştırın
-python scripts/submission/run_pipeline.py --mode predict
+python scripts/run_production.py --stage train
 ```
 
----
+The default shortlist trainer builds 1,877,700 test-shaped candidates from all 250,000 positives. Each query receives `max(100, ceil(2 * positives))` candidates; half of the negative quota targets the positive products' L2 categories and the remainder comes from the catalog. All known positives are excluded.
 
-## 4. Günlük (Log) Dosyası Yapısı
+Five LightGBM and five XGBoost models use the same `StratifiedGroupKFold(group=term_id)` assignment and feature matrix. Test predictions are streamed through disk-backed feature stores because submission term groups are not contiguous.
 
-Pipeline, çalıştırıldığı anda `outputs/pipeline.log` dosyasına ve ekrana eşzamanlı olarak detaylı adımları yazar:
+Production artifacts in `outputs/ensemble_artifacts/` include ten models, TF-IDF vectorizer, OOF labels/folds/predictions, full test predictions, and `oof_manifest.json`. The manifest binds feature schemas, a clean Git revision, source-data hashes, candidate distribution, and every artifact hash.
 
-```
-2026-07-14 08:00:00,123 [INFO] G.G.A Uçtan Uca Prediction Pipeline Başlatıldı.
-2026-07-14 08:00:00,125 [INFO] Dosya bağımlılıkları kontrol ediliyor...
-2026-07-14 08:00:00,130 [INFO] Tüm model bağımlılıkları doğrulandı.
-2026-07-14 08:00:00,135 [INFO] Adım 1/5: Ham veri setleri yükleniyor (terms.csv, items.csv)...
-2026-07-14 08:00:05,450 [INFO] Adım 2/5: Arama çiftleri yükleniyor: datasets/submission_pairs.csv
-2026-07-14 08:00:08,120 [INFO] Adım 3/5: Modeller ve TF-IDF Vectorizer yükleniyor...
-2026-07-14 08:00:10,340 [INFO] Adım 4/5: Batch'ler halinde özellik üretimi ve inference başlıyor...
-2026-07-14 08:00:30,150 [INFO]   İşlenen: 100,000 / 3,359,679 (3.0%) | Hız: 5000 satır/sn
-2026-07-14 08:00:50,220 [INFO]   İşlenen: 200,000 / 3,359,679 (6.0%) | Hız: 5000 satır/sn
-...
-2026-07-14 08:11:15,880 [INFO] Adım 5/5: Karar eşiği uygulanıyor ve çıktı dosyası oluşturuluyor...
-2026-07-14 08:11:18,920 [INFO] Sonuçlar kaydediliyor: outputs/submission_v2.csv
-2026-07-14 08:11:19,100 [INFO] Submission dosyası format doğrulaması yapılıyor...
-2026-07-14 08:11:19,250 [INFO] Pipeline başarıyla tamamlandı! Toplam süre: 679.1 saniye.
+Quick runs use complete query groups and cannot overwrite production artifacts:
+
+```bash
+python scripts/training/run_model_shortlist.py \
+  --sample-terms 300 --test-sample 50000 --num-boost-round 200
 ```
 
----
+The single-LightGBM fallback remains available explicitly:
 
-## 5. Doğrulama ve Güvenlik Adımları
+```bash
+python scripts/run_production.py --stage train --pipeline lightgbm
+```
 
-Pipeline başarıyla bittikten sonra aşağıdaki QA kontrollerini otomatik çalıştırır:
-1. Satır sayısının `3.359.679` olup olmadığını kontrol eder.
-2. Kolon isimlerinin `id` ve `label` olduğunu doğrular.
-3. Eksik (null) veya NaN değer olmadığını teyit eder.
-4. Sınıflandırma tahminlerinin sadece `0` veya `1` olduğunu kontrol eder.
+## 3. Model Selection
 
-*Bu belge yarışma günündeki MLOps yönergemizdir.*
+```bash
+python scripts/run_production.py --stage predict
+```
+
+LightGBM, XGBoost, and weighted blend candidates are compared by cross-fitted Macro-F1. Each validation fold uses weights and a threshold selected only on the other folds. A blend is promoted only when it beats both single models. The deploy threshold is selected on all OOF rows and is labeled as a deployment parameter, not an unbiased score.
+
+## 4. Inference And QA
+
+```bash
+python scripts/run_production.py --stage predict
+```
+
+Selection verifies artifact and current source-data hashes, streams the selected full-test probabilities, and atomically publishes `outputs/submission_v2.csv` only after QA. The output must contain 3,359,679 unique IDs in exact sample order and integer predictions in `{0, 1}`.
+
+The LightGBM fallback inference independently recomputes global candidate-relative features out of core:
+
+```bash
+python scripts/run_production.py --stage predict --pipeline lightgbm
+```
+
+```bash
+python -m src.validate_submission \
+  outputs/submission_v2.csv datasets/sample_submission.csv
+```
+
+## 5. Embeddings
+
+Embeddings are optional until a grouped comparison proves a gain. They are never silently replaced with synthetic or zero vectors.
+
+```bash
+python src/embedding_batch.py --target both \
+  --model models/paraphrase-multilingual-MiniLM-L12-v2 --offline
+python scripts/embedding/run_embedding_score_comparison.py
+```
+
+Each embedding matrix requires its hash manifest. Missing models, stale checkpoints, missing IDs, or model mismatches stop the experiment.

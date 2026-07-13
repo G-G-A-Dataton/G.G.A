@@ -1,170 +1,76 @@
-# Rapor Yöntem Bölümü v1 (13 Temmuz)
+# Solution Method v1
 
-**Hazırlayan:** Ahmet Emin Işın  
-**Tarih:** 13 Temmuz 2026  
-**Kapsam:** Sprint 1-2 Yöntem Özeti (Negatif Örnekleme, Feature Engineering, Validation)
+**Contract date:** 13 July 2026
+**Scope:** final candidate generation, features, validation, model selection, and inference
 
----
+## 1. Problem And Data
 
-## 1. Problem Tanımı
+The task is binary relevance classification for `(term_id, item_id)` pairs and is evaluated with Macro-F1. `training_pairs.csv` contains 250,000 positive pairs across 17,968 training terms; no labeled negatives are provided.
 
-Bu çalışmada, bir e-ticaret platformunda kullanıcı arama sorguları (queries) ile ürün kataloğu arasındaki uyumu tahmin eden ikili sınıflandırma modeli geliştirilmektedir.
+All five competition CSV files are frozen in `configs/final_v1.json` by byte size, ordered schema, row count, and SHA-256. Training and prediction artifacts also record the source hashes and consumers recompute them before use.
 
-- **Girdi:** (query, item) çifti
-- **Çıktı:** 1 (uyumlu) / 0 (uyumsuz)
-- **Değerlendirme:** Macro-F1 skoru
+## 2. Candidate Generation
 
-Veri setinde yalnızca pozitif çiftler sağlanmıştır (`training_pairs.csv`). Negatif örneklerin tamamı yapay olarak üretilmektedir.
+The submission distribution is highly asymmetric: each test term has approximately `max(100, 2 * known-positive-count)` candidate rows. Training therefore uses the same per-term quota instead of a global fixed negative ratio.
 
----
+For each complete training term:
 
-## 2. Negatif Örnekleme Stratejileri
+1. Keep every known positive.
+2. Set the target candidate count to `max(100, ceil(2 * positives))`.
+3. Fill half of the negative quota from catalog products sharing the positive products' normalized L2 category.
+4. Fill the remainder from deterministic catalog-random candidates.
+5. Exclude every known positive pair, including positives outside an experiment sample.
+6. Assert exact per-term quotas, uniqueness, and reproducibility.
 
-### 2.1 Random Negative Örnekleme
+BM25 remains an ablation source. Its compact two-pass index is suitable for hard-negative experiments, but BM25 is not promoted merely because it is semantically closer; promotion requires a grouped comparison.
 
-**Yöntem:** Her pozitif sorgu için, eğitim setinde o sorguya ait olmayan rastgele ürünler seçilir.
+## 3. Feature Contract
 
-**Uygulama:**
-```python
-build_training_set(pos_pairs, items_df, ratio=2, random_state=42)
-```
+The production matrix contains 33 numeric features in a fixed order:
 
-**Avantaj:** Hızlı ve tekrar üretilebilir. Baseline olarak kullanılabilir.
+- 23 base features: normalized title/category overlap and coverage, phrase match, model-code match/conflict, exact brand match, text lengths, category hierarchy, demographic conflict, and parsed color/size/material signals.
+- 1 TF-IDF cosine feature: 10,000 unigram vocabulary with `min_df=2`, fitted once and stored with the models.
+- 9 candidate-relative context features: per-term ranks, top-score gaps, mean deltas, and candidate-count scale.
 
-**Dezavantaj:** Üretilen negatifler genellikle çok kolaydır (farklı kategori, farklı marka). Model gerçek dünya zor negatiflerinde yanılabilir.
+Unicode normalization and complete-token matching prevent substring false positives. Context features are computed over complete term groups. Because submission terms are not contiguous, production test context is generated in two disk-backed passes rather than assuming chunk-local groups.
 
-### 2.2 BM25 Hard Negative Örnekleme
+Sentence embeddings are optional. Only hash-manifested matrices with exact model, dimension, source, ID coverage, and row-order metadata are accepted. Missing embeddings are never replaced by zeros or synthetic values.
 
-**Yöntem:** BM25 metin benzerlik skoruyla her sorgu için en benzer ama pozitif olmayan ürünler seçilir. Bu ürünler modeli daha fazla zorlar.
+## 4. Validation And Thresholds
 
-**Uygulama:**
-```python
-BM25HardNegativeSampler(items_df).sample(pos_pairs, ratio=1)
-```
+All candidates for one `term_id` remain in exactly one of five `StratifiedGroupKFold` folds (`seed=42`). LightGBM and XGBoost share the same fold IDs and feature matrix.
 
-**Avantaj:** Model daha ayırt edici öğrenir, gerçek dünya dağılımına daha yakın.
+Threshold reporting is cross-fitted. For each evaluated fold, the threshold is selected using only the other four OOF folds. The resulting concatenated predictions produce the model-selection Macro-F1. The final deploy threshold is then selected on all OOF rows and is explicitly recorded as a deployment parameter, not as an unbiased validation score.
 
-**Dezavantaj:** BM25 index kurulumu ve örnekleme daha yavaştır (~5-10x).
+Blend weight selection follows the same rule: each validation fold receives a weight and threshold selected outside that fold. The weighted blend is promoted only if its cross-fitted Macro-F1 beats both single models.
 
-### 2.3 Karışık Dataset v2 (Random + BM25)
+## 5. Models And Selection
 
-**Yöntem:** Eğitim setinin bir kısmı BM25 hard negative, kalanı random negative olarak oluşturulur.
+The final shortlist contains five deterministic LightGBM folds and five XGBoost histogram-tree folds. Selection candidates are:
 
-**Uygulama:** `src/train_mix_v2.py`
+- LightGBM mean probability
+- XGBoost mean probability
+- weighted LightGBM/XGBoost probability
 
-**11 Temmuz Sonucu:** 2:1 negatif oran en yüksek F1 (0.9632) verdi. 5:1 oranında F1 düşüşü gözlemlendi.
+`scripts/analysis/run_ensemble_optimization.py` evaluates all three through the shared contract in `src/modeling.py`, selects the highest cross-fitted score, and records weights and threshold in `ensemble_decision.json`.
 
----
+## 6. Reproducibility And Inference
 
-## 3. Feature Engineering
+Production training refuses to create versioned artifacts from a dirty Git worktree. The OOF manifest binds the clean Git revision, data hashes, feature/candidate schema versions, fold contract, row counts, model files, TF-IDF vectorizer, OOF arrays, test arrays, and SHA-256 of every artifact.
 
-### 3.1 Metin Benzerliği Feature'ları (3 Temmuz)
+The selected test probabilities are streamed into `outputs/submission_v2.csv`. Publication is atomic and occurs only after verifying:
 
-| Feature | Formül / Mantık |
-|---|---|
-| `query_title_overlap` | Jaccard(query_words ∩ title_words) |
-| `query_category_overlap` | Jaccard(query_words ∩ category_words) |
-| `query_brand_match` | brand ∈ query → 1, değil → 0 |
-| `query_cat_l1_overlap` | L1 kategori kelimelerinin sorguda geçme oranı |
-| `title_len` | Başlık kelime sayısı |
-| `query_len` | Sorgu kelime sayısı |
+- exactly 3,359,679 rows,
+- exact `id,prediction` column order,
+- exact sample-submission ID order,
+- unique IDs across chunks,
+- integer predictions in `{0, 1}`,
+- no accidental index column.
 
-**Önem:** `query_title_overlap` ve `query_category_overlap` gain importance'ın **%73**'ünü taşıyor (10 Temmuz analizi).
+The canonical commands are documented in `RUNBOOK.md`; pinned packages and local-only optional embedding dependencies are documented in `docs/offline_dependency.md`.
 
-### 3.2 TF-IDF Cosine Similarity (4 Temmuz)
+## 7. Current Evidence Boundary
 
-BM25 ile indekslenen ürün metinleri üzerinde her sorgu için cosine similarity hesaplanır.
+The 300-term acceptance run produced 33,048 training candidates, ten model folds, and 50,000 QA-verified test predictions in 2 minutes 8 seconds at approximately 1.46 GB peak RSS. Cross-fitted Macro-F1 was 0.939451 for LightGBM, 0.937968 for XGBoost, and 0.937536 for the blend; LightGBM was correctly selected at deploy threshold 0.41054133.
 
-```
-vectorizer = TfidfVectorizer(ngram_range=(1,1), max_features=10_000)
-tfidf_cosine = cosine_similarity(query_vec, item_vec)
-```
-
-**6 Temmuz deneyi:** Unigram + 10K vocab en iyi konfigürasyon seçildi (EXP-006).
-
-### 3.3 Demografik Feature'lar (4 Temmuz)
-
-| Feature | Değerler |
-|---|---|
-| `gender_match` | -1 (çelişki) / 0 (unknown) / 1 (uyum) |
-| `age_group_match` | -1 / 0 / 1 |
-| `demographic_conflict` | 1 (herhangi bir çelişki) / 0 |
-
-> **Not:** `gender=unknown` %61 oranında olduğu için bu feature'lar sınırlı sinyal taşıyor.
-
-### 3.4 Kategori Hiyerarşisi (6 Temmuz)
-
-| Feature | Mantık |
-|---|---|
-| `query_cat_l2_overlap` | Orta kategori seviyesi örtüşmesi |
-| `query_cat_l3_overlap` | En spesifik kategori örtüşmesi |
-| `cat_depth` | Kategori derinliği (1/2/3+) |
-
-### 3.5 Attributes Feature'ları (8 Temmuz)
-
-| Feature | Kaynak |
-|---|---|
-| `query_color_match` | items.csv → attributes.renk |
-| `query_size_match` | items.csv → attributes.beden |
-| `query_material_match` | items.csv → attributes.materyal |
-
-> **10 Temmuz Bulgusu:** Bu 3 feature'ın gain importance'ı sıfır çıktı. BM25 hard negative ile tekrar test edilecek.
-
----
-
-## 4. Model ve Validation Yöntemi
-
-### 4.1 Model Seçimi
-
-**9 Temmuz EXP-009 sonucuna göre LightGBM seçildi:**
-
-| Model | CV F1 | Eğitim Süresi |
-|---|---|---|
-| LightGBM (tuned) | **0.9613** | ~12s |
-| XGBoost | 0.9597 | ~85s |
-
-### 4.2 Hiperparametre Tuning (8 Temmuz, EXP-008)
-
-```python
-LGBM_PARAMS = {
-    "num_leaves"       : 31,
-    "learning_rate"    : 0.05,
-    "min_child_samples": 20,
-    "subsample"        : 0.8,
-    "colsample_bytree" : 0.8,
-}
-```
-
-### 4.3 Validation Stratejisi
-
-**5-Fold Stratified Cross-Validation:**
-- Her fold pozitif/negatif oranını korur
-- OOF (Out-of-Fold) tahminleri ile threshold optimizasyonu yapılır
-- Seed sabit tutularak tekrarlanabilirlik sağlanır
-
-**11 Temmuz Threshold Analizi:** Optimal threshold = **0.35** (varsayılan 0.5 değil).
-
----
-
-## 5. Deney Geçmişi Özeti
-
-| Deney | Tarih | F1 | Yenilik |
-|---|---|---|---|
-| EXP-001 | 3 Tem | 0.9613 | Baseline (7 feature) |
-| EXP-003 | 4 Tem | **0.9699** | +TF-IDF cosine |
-| EXP-005 | 7 Tem | 0.9625 | Hard negative baseline |
-| EXP-008 | 8 Tem | 0.9631 | LGBM tuning |
-| EXP-009 | 9 Tem | 0.9613 | LGBM vs XGBoost |
-
----
-
-## 6. Açık Sorular (Sprint 3 İçin)
-
-1. Gerçek embedding cosine feature ne kadar katkı sağlar? (12 Temmuz sonucu sentetikti)
-2. BM25 hard negative vs random negatif tam veri setinde ne fark yaratır?
-3. Ensemble (LGBM + XGB) gerçek anlamda F1 artırır mı? (13 Temmuz)
-4. Optimal threshold tam eğitim setinde de 0.35 mi kalır?
-
----
-
-*Bu belge Sprint 1-2 yöntemlerini özetlemektedir. Sprint 3 tamamlandığında güncellenecektir.*
+This run validates behavior and scale, not leaderboard quality. Full 1,877,700-row training, full 3,359,679-row prediction, optional full embedding ablation, and Kaggle scores must be recorded separately when those runtime jobs complete.

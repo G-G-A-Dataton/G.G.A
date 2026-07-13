@@ -50,6 +50,7 @@ def main(sample: int | None) -> None:
         DATA / "training_pairs.csv",
         dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"},
     )
+    positive_reference_df = train_df
     print(f"pozitif cift: {len(train_df):,} | urun katalogu: {len(items_df):,} | "
           f"benzersiz sorgu: {train_df['term_id'].nunique():,}")
 
@@ -60,10 +61,11 @@ def main(sample: int | None) -> None:
 
     hard_negatives = generate_bm25_hard_negatives(
         train_df, terms_df, items_df, top_n=TOP_N, ratio=RATIO,
+        positive_reference_df=positive_reference_df,
     )
 
     print("\nSizinti kontrolu yapiliyor...")
-    ok = verify_no_leakage(hard_negatives, train_df)
+    ok = verify_no_leakage(hard_negatives, positive_reference_df)
     if not ok:
         raise SystemExit("Sizinti tespit edildi, dosya kaydedilmedi.")
 

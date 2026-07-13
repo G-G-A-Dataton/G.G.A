@@ -1,5 +1,12 @@
 # G.G.A — Deney Kayıt Tablosu (experiment_log.md)
 
+> [!CAUTION]
+> **EXP-001 through EXP-009 are legacy, non-comparable runs.** They used the
+> former row-level CV and/or sampled-positive negative exclusion, and attribute
+> features were inactive against the real flat catalog format. Retain the rows
+> only as history; do not use their scores or thresholds for decisions. The
+> next valid run must follow [`model_status.md`](model_status.md).
+
 Tüm model deneyleri bu dosyada kayıt altına alınır.  
 Her submission veya önemli local validation sonucu buraya eklenir.
 
@@ -48,7 +55,7 @@ Her submission veya önemli local validation sonucu buraya eklenir.
 | `num_boost_round` | 500 (early stopping 30) |
 | Negatif strateji | Random, ratio=3:1 |
 | Eğitim seti | 5.000 pozitif + 15.000 negatif = 20.000 |
-| Validation | 5-Fold Stratified CV, seed=42 |
+| Validation | Legacy 5-Fold row-level Stratified CV, seed=42 (invalidated) |
 
 **Fold Sonuçları:**
 

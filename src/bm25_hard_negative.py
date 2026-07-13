@@ -44,10 +44,13 @@ hard negative'i karıştırıp eksikleri random ile tamamlamak Gün 9
 görevi (`train_mix_v2`) kapsamına giriyor, burada değil.
 """
 
-from collections import defaultdict
+from array import array
+from collections import Counter, defaultdict
 
 import numpy as np
 import pandas as pd
+
+from src.text_utils import normalize_for_matching
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,7 +65,7 @@ def standardize_item_text(items_df: pd.DataFrame) -> pd.Series:
     "/" boşlukla değiştirilir) — böylece BM25 ve TF-IDF aynı kelime
     dağarcığı mantığından besleniyor.
     """
-    category_flat = items_df["category"].astype(str).str.replace("/", " ", regex=False)
+    category_flat = items_df["category"].astype("string").str.replace("/", " ", regex=False)
     return (
         items_df["title"].fillna("") + " " +
         category_flat.fillna("") + " " +
@@ -73,7 +76,7 @@ def standardize_item_text(items_df: pd.DataFrame) -> pd.Series:
 def _tokenize(text) -> list:
     if not text or not isinstance(text, str):
         return []
-    return text.lower().split()
+    return normalize_for_matching(text).split()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -97,23 +100,24 @@ class BM25Index:
         b: float = 0.75,
         max_df_ratio: float = 0.15,
     ):
+        if not 0.0 < max_df_ratio <= 1.0:
+            raise ValueError("max_df_ratio must be in (0, 1]")
+        if k1 <= 0 or not 0.0 <= b <= 1.0:
+            raise ValueError("BM25 requires k1 > 0 and b in [0, 1]")
         self.item_ids = np.asarray(item_ids)
+        if self.item_ids.ndim != 1 or len(self.item_ids) != len(texts):
+            raise ValueError("item_ids and texts must be aligned one-dimensional data")
         self.k1 = k1
         self.b = b
 
-        doc_tokens = [_tokenize(t) for t in texts]
-        self.doc_len = np.array([len(toks) for toks in doc_tokens], dtype=np.float64)
-        self.n_docs = len(doc_tokens)
+        self.n_docs = len(texts)
+        self.doc_len = np.empty(self.n_docs, dtype=np.float32)
+        document_frequency = Counter()
+        for doc_idx, text in enumerate(texts):
+            tokens = _tokenize(text)
+            self.doc_len[doc_idx] = len(tokens)
+            document_frequency.update(set(tokens))
         self.avgdl = self.doc_len.mean() if self.n_docs else 0.0
-
-        # Ters indeks: token -> {doc_idx: term_frequency} (henüz filtresiz)
-        raw_index = defaultdict(dict)
-        for doc_idx, toks in enumerate(doc_tokens):
-            tf = {}
-            for tok in toks:
-                tf[tok] = tf.get(tok, 0) + 1
-            for tok, freq in tf.items():
-                raw_index[tok][doc_idx] = freq
 
         # IDF: rank_bm25.BM25Okapi ile birebir aynı formül (ATIRE varyantı,
         # epsilon tabanlı taban değeriyle) — idf = log(N - n + 0.5) - log(n + 0.5).
@@ -122,8 +126,7 @@ class BM25Index:
         # sonraki adımda taramadan atacağımız yaygın token' lar dahil TÜM
         # token'lar üzerinden yapılır (rank_bm25 ile ayni average_idf için).
         idf, negative_idf_tokens, idf_sum = {}, [], 0.0
-        for tok, postings in raw_index.items():
-            n = len(postings)
+        for tok, n in document_frequency.items():
             val = np.log(self.n_docs - n + 0.5) - np.log(n + 0.5)
             idf[tok] = val
             idf_sum += val
@@ -135,35 +138,56 @@ class BM25Index:
             idf[tok] = eps
         self.idf = idf
 
-        # Taramayı hızlandırmak için indeksten SADECE çok yaygın token'ları
-        # atıyoruz (bkz. modül docstring'i) — idf değerleri yukarıda tüm
-        # token'lar üzerinden zaten hesaplandı, burada sadece posting
-        # listeleri (asıl tarama maliyeti) filtreleniyor.
         max_df = max_df_ratio * self.n_docs if self.n_docs else 0
+        eligible_tokens = {
+            token for token, frequency in document_frequency.items()
+            if frequency <= max_df
+        }
+        postings = defaultdict(lambda: (array("I"), array("I")))
+        for doc_idx, text in enumerate(texts):
+            frequencies = Counter(_tokenize(text))
+            for token, frequency in frequencies.items():
+                if token in eligible_tokens:
+                    postings[token][0].append(doc_idx)
+                    postings[token][1].append(frequency)
         self.inverted_index = {
-            tok: postings for tok, postings in raw_index.items()
-            if len(postings) <= max_df
+            token: (
+                np.frombuffer(documents, dtype=np.uint32),
+                np.frombuffer(frequencies, dtype=np.uint32),
+            )
+            for token, (documents, frequencies) in postings.items()
         }
 
     def top_n(self, query: str, n: int = 50) -> np.ndarray:
         """Sorgu metnine göre en yüksek BM25 skorlu n ürünün item_id'sini döndürür."""
-        candidate_scores = defaultdict(float)
-
+        if n <= 0:
+            raise ValueError("n must be positive")
+        document_parts = []
+        score_parts = []
+        if self.avgdl <= 0:
+            return np.array([], dtype=self.item_ids.dtype)
         for tok in _tokenize(query):
             postings = self.inverted_index.get(tok)
-            if not postings:
+            if postings is None:
                 continue
+            doc_indices, term_frequencies = postings
             idf = self.idf[tok]
-            for doc_idx, tf in postings.items():
-                dl = self.doc_len[doc_idx]
-                denom = tf + self.k1 * (1 - self.b + self.b * dl / self.avgdl)
-                candidate_scores[doc_idx] += idf * (tf * (self.k1 + 1)) / denom
+            tf = term_frequencies.astype(np.float32, copy=False)
+            denominator = tf + self.k1 * (
+                1 - self.b + self.b * self.doc_len[doc_indices] / self.avgdl
+            )
+            document_parts.append(doc_indices)
+            score_parts.append(idf * (tf * (self.k1 + 1)) / denominator)
 
-        if not candidate_scores:
+        if not document_parts:
             return np.array([], dtype=self.item_ids.dtype)
-
-        ranked_doc_idx = sorted(candidate_scores, key=candidate_scores.get, reverse=True)[:n]
-        return self.item_ids[ranked_doc_idx]
+        documents = np.concatenate(document_parts)
+        contributions = np.concatenate(score_parts)
+        unique_documents, inverse = np.unique(documents, return_inverse=True)
+        scores = np.zeros(len(unique_documents), dtype=np.float64)
+        np.add.at(scores, inverse, contributions)
+        order = np.lexsort((unique_documents, -scores))[:n]
+        return self.item_ids[unique_documents[order]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,10 +202,11 @@ def generate_bm25_hard_negatives(
     ratio: int = 3,
     max_df_ratio: float = 0.15,
     verbose: bool = True,
+    positive_reference_df: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
-    Her benzersiz sorgu (term_id) için BM25 ile en benzer top_n üründen,
-    pozitif olmayanların arasından en fazla `ratio` adet hard negative seçer.
+    Her sorgu (term_id) için BM25 ile en benzer ürünlerden, o sorgunun eğitim
+    alt kümesindeki pozitif çift sayısı x `ratio` kadar hard negative seçer.
 
     Parametreler
     ----------
@@ -194,19 +219,51 @@ def generate_bm25_hard_negatives(
     top_n : int, default=50
         BM25 ile getirilecek aday sayısı (bu adaylardan pozitif olanlar elenir).
     ratio : int, default=3
-        Sorgu başına üretilecek hedef hard negative sayısı (üst sınır; top_n
-        adayları arasında yeterli pozitif-olmayan bulunamazsa daha az üretilir).
+        Her pozitif çift başına üretilecek hedef hard negative sayısı. BM25
+        adayları yetmezse daha az üretilebilir; karma üretici kalan kotayı
+        random negatiflerle doldurur.
     max_df_ratio : float, default=0.15
         BM25Index için — kataloğun bu orandan fazlasında geçen kelimeler
         indekslenmez (bkz. BM25Index docstring'i).
     verbose : bool, default=True
         İlerleme bilgisi yazdır.
+    positive_reference_df : pd.DataFrame, optional
+        Negatiflerden dışlanacak tüm bilinen pozitif çiftler. Örneklemli
+        çalışmada tam pozitif veri seti burada verilmelidir.
 
     Döndürür
     -------
     pd.DataFrame
         Kolonlar: term_id, item_id, label (hepsi 0)
     """
+    if not isinstance(ratio, int) or ratio <= 0:
+        raise ValueError(f"ratio must be a positive integer, got {ratio}")
+    if not isinstance(top_n, int) or top_n <= 0:
+        raise ValueError(f"top_n must be a positive integer, got {top_n}")
+    required_pairs = {"term_id", "item_id"}
+    if not required_pairs.issubset(train_df.columns):
+        raise ValueError(f"train_df must contain {sorted(required_pairs)}")
+    if train_df.empty:
+        return pd.DataFrame(columns=["term_id", "item_id", "label"])
+    if not {"term_id", "query"}.issubset(terms_df.columns):
+        raise ValueError("terms_df must contain term_id and query")
+    if terms_df["term_id"].duplicated().any():
+        raise ValueError("terms_df contains duplicate term_id values")
+    required_items = {"item_id", "title", "category", "brand"}
+    if not required_items.issubset(items_df.columns):
+        raise ValueError(f"items_df must contain {sorted(required_items)}")
+    if items_df.empty or items_df["item_id"].isna().any():
+        raise ValueError("items_df must contain non-null catalog items")
+    if items_df["item_id"].duplicated().any():
+        raise ValueError("items_df contains duplicate item_id values")
+    positive_reference_df = (
+        train_df if positive_reference_df is None else positive_reference_df
+    )
+    if not required_pairs.issubset(positive_reference_df.columns):
+        raise ValueError(
+            f"positive_reference_df must contain {sorted(required_pairs)}"
+        )
+
     if verbose:
         print("[bm25_hard_negative] Ürün metni standardize ediliyor...")
     item_texts = standardize_item_text(items_df).tolist()
@@ -222,8 +279,9 @@ def generate_bm25_hard_negatives(
               f"{len(index.inverted_index):,} benzersiz token indekslendi.")
 
     # Her term için pozitif item_id kümesi — hard negative bunlarla asla çakışmamalı.
-    pos_by_term = train_df.groupby("term_id")["item_id"].apply(set)
+    pos_by_term = positive_reference_df.groupby("term_id")["item_id"].apply(set)
     term_to_query = terms_df.set_index("term_id")["query"]
+    target_by_term = train_df.groupby("term_id").size().mul(ratio)
 
     unique_terms = train_df["term_id"].unique()
     if verbose:
@@ -235,14 +293,15 @@ def generate_bm25_hard_negatives(
         query = term_to_query.get(term_id, "")
         pos_items = pos_by_term.get(term_id, set())
 
+        target = int(target_by_term.loc[term_id])
+        candidate_limit = max(top_n, target + len(pos_items))
         added = 0
-        term_target = ratio.get(term_id, ratio) if isinstance(ratio, (dict, pd.Series)) else ratio
-        for item_id in index.top_n(query, n=top_n):
+        for item_id in index.top_n(query, n=candidate_limit):
             if item_id in pos_items:
                 continue
             negatives.append((term_id, item_id))
             added += 1
-            if added >= term_target:
+            if added >= target:
                 break
 
         if verbose and (i + 1) % 5_000 == 0:
@@ -253,15 +312,20 @@ def generate_bm25_hard_negatives(
     negatives_df["label"] = 0
 
     if verbose:
+        expected_total = int(target_by_term.sum())
         avg_found = len(negatives_df) / len(unique_terms) if len(unique_terms) else 0.0
+        # reindex: hic hard negative uretilemeyen (0 satirlik) terimler
+        # groupby sonucunda hic gorunmez, reindex ile bunlari da 0 olarak
+        # sayima katiyoruz (bkz. notebooks/03_negatif_kalite_mert.py'deki
+        # ayni desen).
         term_counts = (
             negatives_df.groupby("term_id").size().reindex(unique_terms, fill_value=0)
             if len(negatives_df) else pd.Series(0, index=unique_terms)
         )
-        hedef_series = ratio if isinstance(ratio, pd.Series) else pd.Series(ratio, index=unique_terms)
-        eksik = (term_counts < hedef_series).sum()
+        target_counts = target_by_term.reindex(unique_terms)
+        eksik = (term_counts < target_counts).sum()
         print(f"[bm25_hard_negative] Toplam {len(negatives_df):,} hard negative uretildi "
-              f"(sorgu basina ort. {avg_found:.2f}).")
+              f"(sorgu basina ort. {avg_found:.2f}; toplam hedef {expected_total:,}).")
         print(f"[bm25_hard_negative] Hedefin altinda kalan sorgu sayisi: {eksik:,} "
               f"(top_n adaylari arasinda yeterli pozitif-olmayan bulunamadi).")
 
@@ -292,6 +356,7 @@ if __name__ == "__main__":
 
     hard_negatives = generate_bm25_hard_negatives(
         sample_train, terms_df, items_df, top_n=50, ratio=3,
+        positive_reference_df=train_df,
     )
 
     print("\nSizinti kontrolu yapiliyor...")

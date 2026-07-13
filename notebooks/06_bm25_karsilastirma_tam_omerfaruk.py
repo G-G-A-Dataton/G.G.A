@@ -33,6 +33,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from src.data               import load_terms, load_items
 from src.bm25_hard_negative import generate_bm25_hard_negatives
+from src.features           import FEATURE_COLS
 from src.negative_sampling  import verify_no_leakage
 
 DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
@@ -78,6 +79,7 @@ if SAMPLE_N:
 else:
     sample_train = train_raw.copy()
     print(f"  Tam veri modu: {train_raw['term_id'].nunique():,} benzersiz sorgu.")
+sample_term_count = sample_train["term_id"].nunique()
 
 # ─── 2. BM25 Hard Negative Üret ───────────────────────────────────────────────
 print(f"\n[2/4] BM25 hard negative üretiliyor (top_n={TOP_N}, ratio={RATIO})...")
@@ -89,6 +91,7 @@ hard_negatives = generate_bm25_hard_negatives(
     top_n=TOP_N,
     ratio=RATIO,
     verbose=True,
+    positive_reference_df=train_raw,
 )
 elapsed = time.time() - t0
 print(f"\n  ✅ Üretim tamamlandı: {len(hard_negatives):,} hard negative ({elapsed:.1f}s)")
@@ -109,8 +112,11 @@ print("\n" + "=" * 60)
 print("  Hard Negative vs Random Negative Karşılaştırması Başlıyor")
 print("=" * 60)
 
-comparison_script = os.path.join(PROJECT_ROOT, "run_hard_neg_comparison.py")
+comparison_script = os.path.join(
+    PROJECT_ROOT, "scripts", "data", "run_hard_neg_comparison.py"
+)
 cmd = [sys.executable, comparison_script, "--bm25", BM25_CSV]
+cmd.extend(["--sample-terms", str(SAMPLE_N)] if SAMPLE_N else ["--all-terms"])
 print(f"  Komut: {' '.join(cmd)}\n")
 
 # Karşılaştırma scriptini aynı process içinde çalıştır
@@ -124,17 +130,21 @@ else:
     if os.path.exists(comparison_csv):
         print("\n  Sonuç tablosu:")
         df_result = pd.read_csv(comparison_csv)
-        print(df_result[["strateji", "mean_f1", "std_f1", "best_threshold", "best_f1"]].to_string(index=False))
+        print(df_result[[
+            "strategy", "cross_fitted_macro_f1", "fold_macro_f1_std",
+            "deploy_threshold"
+        ]].to_string(index=False))
 
         print("\n" + "=" * 60)
         print("  EXP-006 için experiment_log.md'ye eklenecek satır:")
         print("=" * 60)
         if len(df_result) >= 2:
-            bm25_row = df_result[df_result["strateji"].str.contains("BM25", case=False)].iloc[0]
-            rand_row = df_result[df_result["strateji"].str.contains("Random", case=False)].iloc[0]
-            diff = bm25_row["best_f1"] - rand_row["best_f1"]
-            print(f"  | EXP-006 | 8 Tem | Ömer Faruk | LightGBM | BM25 Hard 3:1 / {len(sample_terms):,} sorgu "
-                  f"| 15 temel+tfidf | {bm25_row['mean_f1']:.4f} ± {bm25_row['std_f1']:.4f} | — | "
+            bm25_row = df_result[df_result["strategy"] == "bm25"].iloc[0]
+            rand_row = df_result[df_result["strategy"] == "random"].iloc[0]
+            diff = bm25_row["cross_fitted_macro_f1"] - rand_row["cross_fitted_macro_f1"]
+            print(f"  | EXP-006 | 8 Tem | Ömer Faruk | LightGBM | BM25 Hard 3:1 / {sample_term_count:,} sorgu "
+                  f"| {len(FEATURE_COLS)} temel | {bm25_row['cross_fitted_macro_f1']:.4f} ± "
+                  f"{bm25_row['fold_macro_f1_std']:.4f} | — | "
                   f"BM25 vs Random fark: {diff:+.4f} |")
         else:
             print("  Karşılaştırma için iki strateji de olmalı.")

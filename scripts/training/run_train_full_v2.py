@@ -1,271 +1,428 @@
-"""
-run_train_full_v2.py
-====================
-G.G.A Takımı — v2 Model Eğitimi: Tam Veri + Karışık Negatif (9 Temmuz Görevi)
+"""Canonical grouped LightGBM training pipeline for production artifacts."""
 
-Ömer Faruk Kara tarafından hazırlanmıştır.
-
-Bu script, Sprint 1'deki 5K örneklik baseline'ın aksine:
-  ─ TÜM 250K pozitif çifti kullanır
-  ─ BM25 hard negative + random fallback (train_mix_v2) ile negatif üretir
-  ─ 15 feature (temel 12 + TF-IDF + attributes) ile modeli eğitir
-  ─ Eğitilmiş modeli kaydeder → run_full_submission_v2.py ile submission üretilir
-
-Çalıştırmak için (uzun sürer — tüm veri):
-  python run_train_full_v2.py
-
-Hızlı test için (sample_size ayarla):
-  python run_train_full_v2.py --sample 10000
-
-Çıktılar:
-  outputs/lgbm_v2_fold_{i}.txt   → 5 fold modeli
-  outputs/tfidf_vectorizer_v2.pkl → TF-IDF vectorizer
-  outputs/oof_preds_v2.npy        → OOF tahminleri (threshold opt. için)
-"""
-
-import os
-import sys
 import argparse
-import warnings
+import hashlib
+import json
+import os
+import subprocess
+import sys
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-warnings.filterwarnings("ignore")
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.data              import load_terms, load_items
-from src.features          import build_features, FEATURE_COLS
-from src.tfidf_features    import build_tfidf_vectorizer, add_tfidf_features, save_vectorizer
-from src.train_mix_v2      import build_mixed_training_set, verify_mix_no_leakage
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_kfold
-from src.error_analysis    import generate_error_report
-import lightgbm as lgb
+from src.candidate_sampling import (
+    CANDIDATE_SAMPLING_SCHEMA_VERSION,
+    build_test_shaped_training_set,
+    candidate_distribution,
+    sample_complete_terms,
+)
+from src.context_features import CONTEXT_FEATURE_SCHEMA_VERSION, add_context_features
+from src.data import load_items, load_terms
+from src.error_analysis import generate_error_report
+from src.features import FEATURE_SCHEMA_VERSION, build_features
+from src.metrics import macro_f1_from_proba
+from src.modeling import (
+    MODEL_FEATURE_COLS,
+    build_group_fold_ids,
+    cross_fitted_threshold_evaluation,
+    predictions_from_threshold_report,
+)
+from src.tfidf_features import (
+    add_tfidf_features,
+    build_tfidf_vectorizer,
+    save_vectorizer,
+)
 
-DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
+
+DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-NEGATIVE_RATIO = 3
-RANDOM_SEED    = 42
-
-# TF-IDF: 6 Temmuz deneyi sonucu (docs/tfidf_deney_tablosu.md)
+EXPECTED_POSITIVE_ROWS = 250_000
+EXPECTED_TRAINING_ROWS = 1_877_700
+RANDOM_SEED = 42
+N_SPLITS = 5
+MIN_CANDIDATES = 100
+DENSE_MULTIPLIER = 2.0
+CATEGORY_HARD_FRACTION = 0.5
 TFIDF_MAX_FEATURES = 10_000
-TFIDF_NGRAM        = (1, 1)
+TFIDF_NGRAM = (1, 1)
 
-# LightGBM hiperparametreleri — EXP-001 baseline'ından
 LGBM_PARAMS = {
-    "objective"        : "binary",
-    "metric"           : "binary_logloss",
-    "learning_rate"    : 0.05,
-    "num_leaves"       : 63,          # v2: 31'den 63'e çıkarıldı (daha derin ağaçlar — daha fazla veri var)
-    "min_child_samples": 50,          # v2: 20'den 50'ye (1M satırda overfitting'i önlemek için)
-    "subsample"        : 0.8,
-    "colsample_bytree" : 0.8,
-    "reg_alpha"        : 0.1,         # v2: L1 regularization eklendi
-    "reg_lambda"       : 1.0,         # v2: L2 regularization eklendi
-    "verbose"          : -1,
-    "random_state"     : RANDOM_SEED,
-    "n_jobs"           : -1,          # Tüm CPU'ları kullan
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "learning_rate": 0.04,
+    "num_leaves": 63,
+    "min_child_samples": 100,
+    "feature_fraction": 0.85,
+    "bagging_fraction": 0.85,
+    "bagging_freq": 1,
+    "reg_alpha": 0.2,
+    "reg_lambda": 1.5,
+    "max_bin": 255,
+    "seed": RANDOM_SEED,
+    "feature_fraction_seed": RANDOM_SEED,
+    "bagging_seed": RANDOM_SEED,
+    "data_random_seed": RANDOM_SEED,
+    "deterministic": True,
+    "force_col_wise": True,
+    "num_threads": -1,
+    "verbosity": -1,
 }
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="G.G.A v2 tam model egitimi")
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Train canonical G.G.A artifacts")
     parser.add_argument(
-        "--sample", type=int, default=None,
-        help="Hizli test icin pozitif ornek sayisi (None = tum 250K)"
+        "--sample-terms",
+        "--sample",
+        dest="sample_terms",
+        type=int,
+        default=None,
+        help="Train on N complete term_id groups; omitted means all groups",
     )
+    parser.add_argument("--min-candidates", type=int, default=MIN_CANDIDATES)
+    parser.add_argument("--dense-multiplier", type=float, default=DENSE_MULTIPLIER)
     parser.add_argument(
-        "--bm25-top-n", type=int, default=50,
-        help="BM25 hard negative icin top-N aday (varsayilan: 50)"
+        "--category-hard-fraction", type=float, default=CATEGORY_HARD_FRACTION
     )
-    parser.add_argument(
-        "--no-error-analysis", action="store_true",
-        help="Hata analizini atla (daha hizli calisir)"
+    parser.add_argument("--num-boost-round", type=int, default=1_500)
+    parser.add_argument("--early-stopping-rounds", type=int, default=100)
+    parser.add_argument("--no-error-analysis", action="store_true")
+    parser.add_argument("--artifact-dir", default=None)
+    return parser.parse_args(argv)
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as source_file:
+        for chunk in iter(lambda: source_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def git_revision(require_clean=True):
+    if require_clean:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if status.stdout.strip():
+            raise RuntimeError(
+                "Refusing to create versioned model artifacts from a dirty worktree"
+            )
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
     )
-    return parser.parse_args()
+    return result.stdout.strip()
 
 
-def main():
-    args = parse_args()
+def atomic_save_npy(path, values):
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "wb") as output_file:
+        np.save(output_file, values, allow_pickle=False)
+    os.replace(temporary_path, path)
 
-    print("=" * 65)
-    print("  G.G.A v2 — Tam Veri + Karisik Negatif Model Egitimi")
-    print("  9 Temmuz 2026 — Omer Faruk Kara")
-    print("=" * 65)
 
-    # ─── 1. Veri Yükle ────────────────────────────────────────────────────────
-    print("\n[1/7] Veriler yukleniyor...")
-    terms_df  = load_terms(os.path.join(DATA_DIR, "terms.csv"))
-    items_df  = load_items(os.path.join(DATA_DIR, "items.csv"))
-    train_raw = pd.read_csv(
-        os.path.join(DATA_DIR, "training_pairs.csv"),
-        dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
+def atomic_write_text(path, value):
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as output_file:
+        output_file.write(value)
+    os.replace(temporary_path, path)
+
+
+def write_artifact_manifest(
+    *,
+    artifact_dir,
+    feature_cols,
+    model_paths,
+    vectorizer_path,
+    threshold_path,
+    oof_path,
+    threshold_report_path,
+    threshold,
+    training_mode,
+    candidate_config,
+    candidate_stats,
+    positive_reference_rows,
+    source_data_sha256,
+    validation_report,
+    revision,
+):
+    artifact_paths = [
+        *model_paths,
+        vectorizer_path,
+        threshold_path,
+        oof_path,
+        threshold_report_path,
+    ]
+    missing = [path for path in artifact_paths if not os.path.exists(path)]
+    if missing:
+        raise FileNotFoundError(f"Cannot manifest missing artifacts: {missing}")
+    manifest = {
+        "artifact_schema_version": 2,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "context_feature_schema_version": CONTEXT_FEATURE_SCHEMA_VERSION,
+        "candidate_sampling_schema_version": CANDIDATE_SAMPLING_SCHEMA_VERSION,
+        "training_mode": training_mode,
+        "code_revision": revision,
+        "feature_columns": feature_cols,
+        "validation": {
+            "splitter": "StratifiedGroupKFold",
+            "group_column": "term_id",
+            "n_splits": N_SPLITS,
+            "random_state": RANDOM_SEED,
+            "threshold_selection": "cross_fitted",
+        },
+        "candidate_sampling": {
+            "strategy": "test_shaped_category_random",
+            **candidate_config,
+            "positive_reference_rows": int(positive_reference_rows),
+        },
+        "training": candidate_stats,
+        "metrics": validation_report,
+        "threshold": float(threshold),
+        "source_data_sha256": source_data_sha256,
+        "artifacts": {
+            "models": [os.path.basename(path) for path in model_paths],
+            "vectorizer": os.path.basename(vectorizer_path),
+            "threshold": os.path.basename(threshold_path),
+            "oof_predictions": os.path.basename(oof_path),
+            "threshold_report": os.path.basename(threshold_report_path),
+        },
+        "sha256": {
+            os.path.basename(path): sha256_file(path) for path in artifact_paths
+        },
+    }
+    manifest_path = os.path.join(artifact_dir, "model_manifest_v2.json")
+    temporary_path = manifest_path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as manifest_file:
+        json.dump(manifest, manifest_file, ensure_ascii=False, indent=2)
+        manifest_file.write("\n")
+    os.replace(temporary_path, manifest_path)
+    return manifest_path
+
+
+def _sample_terms_from_args(args):
+    return getattr(args, "sample_terms", getattr(args, "sample", None))
+
+
+def _validate_args(args):
+    sample_terms = _sample_terms_from_args(args)
+    if sample_terms is not None and sample_terms <= 0:
+        raise ValueError("--sample-terms must be positive")
+    for name in ("num_boost_round", "early_stopping_rounds"):
+        value = getattr(args, name, 1)
+        if value <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be positive")
+    return sample_terms
+
+
+def main(argv=None):
+    args = parse_args(argv) if argv is not None else parse_args()
+    sample_terms = _validate_args(args)
+    artifact_dir = os.path.abspath(
+        getattr(args, "artifact_dir", None)
+        or (
+            os.path.join(OUTPUT_DIR, "sample_artifacts_v2")
+            if sample_terms
+            else OUTPUT_DIR
+        )
     )
-    print(f"  Sorgular : {len(terms_df):,}  |  Urunler: {len(items_df):,}")
-    print(f"  Pozitif  : {len(train_raw):,}")
+    if sample_terms and os.path.realpath(artifact_dir) == os.path.realpath(OUTPUT_DIR):
+        raise ValueError("Sample training cannot write to the production artifact directory")
+    os.makedirs(artifact_dir, exist_ok=True)
 
-    # Örnek modunda küçük veri
-    if args.sample:
-        train_pos = train_raw.sample(n=args.sample, random_state=RANDOM_SEED)
-        print(f"  [SAMPLE MODU] {args.sample:,} pozitif ile calisiliyor.")
-    else:
-        train_pos = train_raw.copy()
-        print(f"  [TAM VERİ] Tum {len(train_raw):,} pozitif kullaniliyor.")
+    print("=" * 72)
+    print("G.G.A canonical training: test-shaped candidates + grouped OOF")
+    print("=" * 72)
+    paths = {
+        "terms.csv": os.path.join(DATA_DIR, "terms.csv"),
+        "items.csv": os.path.join(DATA_DIR, "items.csv"),
+        "training_pairs.csv": os.path.join(DATA_DIR, "training_pairs.csv"),
+    }
 
-    # ─── 2. Karışık Negatif Üret ──────────────────────────────────────────────
-    print("\n[2/7] Karisik negatif (BM25 + random fallback) uretiliyor...")
-    full_train = build_mixed_training_set(
-        train_df=train_pos,
-        terms_df=terms_df,
-        items_df=items_df,
-        ratio=NEGATIVE_RATIO,
-        bm25_top_n=args.bm25_top_n,
-        random_state=RANDOM_SEED,
+    print("[1/7] Loading and validating source data")
+    terms_df = load_terms(paths["terms.csv"])
+    items_df = load_items(paths["items.csv"])
+    positives = pd.read_csv(
+        paths["training_pairs.csv"],
+        dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"},
+    )
+    if (
+        positives.columns.tolist() != ["id", "term_id", "item_id", "label"]
+        or len(positives) != EXPECTED_POSITIVE_ROWS
+        or not (positives["label"] == 1).all()
+        or positives.duplicated(["term_id", "item_id"]).any()
+    ):
+        raise ValueError("training_pairs.csv does not satisfy the positive-pair contract")
+    selected_positives = (
+        sample_complete_terms(positives, sample_terms, RANDOM_SEED)
+        if sample_terms
+        else positives.copy()
+    )
+
+    print("[2/7] Building leakage-free test-shaped candidate sets")
+    candidate_config = {
+        "min_candidates": int(getattr(args, "min_candidates", MIN_CANDIDATES)),
+        "dense_multiplier": float(
+            getattr(args, "dense_multiplier", DENSE_MULTIPLIER)
+        ),
+        "category_hard_fraction": float(
+            getattr(args, "category_hard_fraction", CATEGORY_HARD_FRACTION)
+        ),
+        "random_state": RANDOM_SEED,
+    }
+    candidates = build_test_shaped_training_set(
+        selected_positives,
+        items_df,
+        positive_reference_df=positives,
         verbose=True,
+        **{key: value for key, value in candidate_config.items() if key != "random_state"},
+        random_state=RANDOM_SEED,
     )
+    stats = candidate_distribution(candidates)
+    if not sample_terms and stats["rows"] != EXPECTED_TRAINING_ROWS:
+        raise RuntimeError(
+            f"Full candidate row mismatch: {stats['rows']:,} != {EXPECTED_TRAINING_ROWS:,}"
+        )
 
-    print("\n  Sizinti kontrolu...")
-    verify_mix_no_leakage(full_train, train_raw)
+    print("[3/7] Merging references and computing lexical features")
+    merged = candidates.merge(
+        terms_df, on="term_id", how="left", validate="many_to_one"
+    ).merge(items_df, on="item_id", how="left", validate="many_to_one")
+    if merged[["query", "title"]].isna().any().any():
+        raise ValueError("Candidate set contains unresolved term_id or item_id values")
+    merged = build_features(merged, copy=False)
 
-    # ─── 3. Merge + Feature'lar ───────────────────────────────────────────────
-    print("\n[3/7] Merge ve temel feature hesaplaniyor...")
-    merged = full_train.merge(terms_df, on="term_id", how="left")
-    merged = merged.merge(items_df,  on="item_id",  how="left")
-    merged = build_features(merged)
-
-    # ─── 4. TF-IDF Feature ────────────────────────────────────────────────────
-    print(f"\n[4/7] TF-IDF feature ekleniyor (max={TFIDF_MAX_FEATURES}, ngram={TFIDF_NGRAM})...")
-    vec_path = os.path.join(OUTPUT_DIR, "tfidf_vectorizer_v2.pkl")
+    print("[4/7] Fitting TF-IDF and computing candidate-relative features")
+    vectorizer_path = os.path.join(artifact_dir, "tfidf_vectorizer_v2.pkl")
     vectorizer = build_tfidf_vectorizer(
-        terms_df, items_df,
+        terms_df,
+        items_df,
         max_features=TFIDF_MAX_FEATURES,
         ngram_range=TFIDF_NGRAM,
+        min_df=2,
     )
-    save_vectorizer(vectorizer, vec_path)
-    merged = add_tfidf_features(merged, vectorizer)
+    save_vectorizer(vectorizer, vectorizer_path)
+    merged = add_tfidf_features(merged, vectorizer, copy=False)
+    merged = add_context_features(merged, copy=False)
 
-    feature_cols = FEATURE_COLS + ["tfidf_cosine"]
-    print(f"  Toplam feature: {len(feature_cols)} ({len(FEATURE_COLS)} temel + 1 TF-IDF)")
+    X = merged[MODEL_FEATURE_COLS].astype("float32")
+    y = merged["label"].to_numpy(dtype=np.int8)
+    groups = merged["term_id"].to_numpy()
+    fold_ids = build_group_fold_ids(y, groups, n_splits=N_SPLITS, random_state=RANDOM_SEED)
 
-    X = merged[feature_cols]
-    y = merged["label"]
-
-    print(f"\n  Egitim seti: {len(X):,} satir  |  Pozitif: {(y==1).sum():,}  |  Negatif: {(y==0).sum():,}")
-
-    # ─── 5. 5-Fold CV ─────────────────────────────────────────────────────────
-    print("\n[5/7] LightGBM 5-Fold Stratified CV basliyor...")
-    print("-" * 60)
-
-    skf         = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
-    fold_scores = []
-    oof_preds   = np.zeros(len(X))
-    trained_models = []
-
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
-        X_tr, X_val = X.iloc[tr_idx], X.iloc[val_idx]
-        y_tr, y_val = y.iloc[tr_idx], y.iloc[val_idx]
-
-        dtrain = lgb.Dataset(X_tr, label=y_tr)
-        dval   = lgb.Dataset(X_val, label=y_val)
-
+    print("[5/7] Training five grouped LightGBM folds")
+    oof_predictions = np.zeros(len(y), dtype=np.float32)
+    models = []
+    model_paths = []
+    fold_default_scores = []
+    for fold in range(N_SPLITS):
+        training_index = np.flatnonzero(fold_ids != fold)
+        validation_index = np.flatnonzero(fold_ids == fold)
+        train_set = lgb.Dataset(X.iloc[training_index], label=y[training_index])
+        validation_set = lgb.Dataset(
+            X.iloc[validation_index], label=y[validation_index], reference=train_set
+        )
         model = lgb.train(
-            LGBM_PARAMS, dtrain,
-            num_boost_round=1000,
-            valid_sets=[dval],
+            LGBM_PARAMS,
+            train_set,
+            num_boost_round=getattr(args, "num_boost_round", 1_500),
+            valid_sets=[validation_set],
             callbacks=[
-                lgb.early_stopping(50, verbose=False),
-                lgb.log_evaluation(period=-1),
-            ]
+                lgb.early_stopping(
+                    getattr(args, "early_stopping_rounds", 100), verbose=False
+                ),
+                lgb.log_evaluation(period=0),
+            ],
         )
-        trained_models.append(model)
+        probabilities = model.predict(
+            X.iloc[validation_index], num_iteration=model.best_iteration
+        )
+        oof_predictions[validation_index] = probabilities
+        score = macro_f1_from_proba(y[validation_index], probabilities, 0.5)
+        fold_default_scores.append(float(score))
+        model_path = os.path.join(artifact_dir, f"lgbm_v2_fold_{fold + 1}.txt")
+        temporary_model_path = model_path + ".tmp"
+        model.save_model(temporary_model_path, num_iteration=model.best_iteration)
+        os.replace(temporary_model_path, model_path)
+        models.append(model)
+        model_paths.append(model_path)
+        print(
+            f"  fold={fold + 1} rows={len(validation_index):,} "
+            f"f1@0.5={score:.6f} best_iteration={model.best_iteration}"
+        )
 
-        # Modeli diske kaydet (submission için tekrar yüklenir)
-        model_path = os.path.join(OUTPUT_DIR, f"lgbm_v2_fold_{fold}.txt")
-        model.save_model(model_path)
+    print("[6/7] Cross-fitting threshold and writing verifiable artifacts")
+    threshold_report = cross_fitted_threshold_evaluation(y, oof_predictions, fold_ids)
+    threshold_report["fold_default_macro_f1"] = fold_default_scores
+    threshold = threshold_report["deploy_threshold"]
+    oof_path = os.path.join(artifact_dir, "oof_preds_v2.npy")
+    threshold_path = os.path.join(artifact_dir, "best_threshold_v2.txt")
+    threshold_report_path = os.path.join(artifact_dir, "threshold_report_v2.json")
+    atomic_save_npy(oof_path, oof_predictions)
+    atomic_write_text(threshold_path, f"{threshold:.17g}\n")
+    atomic_write_text(
+        threshold_report_path,
+        json.dumps(threshold_report, ensure_ascii=False, indent=2) + "\n",
+    )
 
-        val_proba = model.predict(X_val)
-        oof_preds[val_idx] = val_proba
-        fold_f1 = macro_f1_from_proba(y_val, val_proba, threshold=0.5)
-        fold_scores.append(fold_f1)
-        print(f"  Fold {fold}/5  |  Macro-F1: {fold_f1:.4f}  |  Best iter: {model.best_iteration}")
-
-    mean_f1 = np.mean(fold_scores)
-    std_f1  = np.std(fold_scores)
-    print("-" * 60)
-    print(f"  ORT. Macro-F1 (v2): {mean_f1:.4f} (+/- {std_f1:.4f})")
-
-    # OOF tahminlerini kaydet
-    oof_path = os.path.join(OUTPUT_DIR, "oof_preds_v2.npy")
-    np.save(oof_path, oof_preds)
-
-    # ─── 6. Threshold Optimizasyonu ───────────────────────────────────────────
-    print("\n[6/7] Threshold optimizasyonu...")
-    best_thresh, best_f1, all_results = find_best_threshold(y.values, oof_preds)
-    print(f"  En iyi threshold : {best_thresh}  ->  {best_f1:.4f}")
-    print(f"  Varsayilan (0.50): {macro_f1_from_proba(y.values, oof_preds, 0.5):.4f}")
-
-    # Threshold'u kaydet
-    thresh_path = os.path.join(OUTPUT_DIR, "best_threshold_v2.txt")
-    with open(thresh_path, "w") as f:
-        f.write(str(best_thresh))
-    print(f"  Threshold kaydedildi: {thresh_path}")
-
-    # ─── 7. Feature Importance ────────────────────────────────────────────────
-    print("\n[7/7] Feature importance (5-fold ortalama):")
-    print("-" * 60)
-    importance_arr = np.zeros(len(feature_cols))
-    for m in trained_models:
-        importance_arr += m.feature_importance(importance_type="gain")
-    importance_arr /= len(trained_models)
-
-    feat_imp = pd.DataFrame({"feature": feature_cols, "importance": importance_arr})
-    feat_imp = feat_imp.sort_values("importance", ascending=False)
-    feat_imp.to_csv(os.path.join(OUTPUT_DIR, "feature_importance_v2.csv"), index=False)
-
-    max_imp = feat_imp["importance"].max()
-    for _, row in feat_imp.iterrows():
-        bar = "#" * int(row["importance"] / max_imp * 30)
-        print(f"  {row['feature']:<28} {bar} ({row['importance']:.1f})")
-
-    # ─── Hata Analizi (opsiyonel) ─────────────────────────────────────────────
-    if not args.no_error_analysis:
-        print("\n  Hata analizi yapiliyor (--no-error-analysis ile atlabilir)...")
-        error_report_path = os.path.join(OUTPUT_DIR, "error_report_v2.md")
+    importance = np.mean(
+        [model.feature_importance(importance_type="gain") for model in models], axis=0
+    )
+    pd.DataFrame(
+        {"feature": MODEL_FEATURE_COLS, "importance_gain": importance}
+    ).sort_values("importance_gain", ascending=False).to_csv(
+        os.path.join(artifact_dir, "feature_importance_v2.csv"), index=False
+    )
+    if not getattr(args, "no_error_analysis", False):
+        cross_fitted_predictions = predictions_from_threshold_report(
+            oof_predictions, fold_ids, threshold_report
+        )
         generate_error_report(
-            merged, oof_preds,
-            threshold=best_thresh,
-            output_path=error_report_path,
+            merged,
+            oof_predictions,
+            threshold="fold-specific",
+            output_path=os.path.join(artifact_dir, "error_report_v2.md"),
+            predictions=cross_fitted_predictions,
         )
 
-    # ─── Sonuç Özeti ──────────────────────────────────────────────────────────
-    print("\n" + "=" * 65)
-    print("  V2 EGITIM SONUC OZETI")
-    print("=" * 65)
-    neg_sources = full_train[full_train["label"] == 0]["neg_source"].value_counts()
-    print(f"  Veri boyutu       : {len(full_train):,} satir")
-    print(f"  BM25 negatif      : {neg_sources.get('bm25', 0):,}")
-    print(f"  Random negatif    : {neg_sources.get('random', 0):,}")
-    print(f"  Feature sayisi    : {len(feature_cols)}")
-    print(f"  Ort. Macro-F1     : {mean_f1:.4f} +/- {std_f1:.4f}")
-    print(f"  En iyi threshold  : {best_thresh}")
-    print(f"  Optimized F1      : {best_f1:.4f}")
-    print(f"  Modeller kaydi    : outputs/lgbm_v2_fold_{{1-5}}.txt")
-    print(f"  Vectorizer kaydi  : {vec_path}")
-    print(f"  OOF preds kaydi   : {oof_path}")
-    print(f"\n  Submission icin:")
-    print(f"    python run_full_submission_v2.py")
-    print("=" * 65)
+    source_hashes = {name: sha256_file(path) for name, path in paths.items()}
+    manifest_path = write_artifact_manifest(
+        artifact_dir=artifact_dir,
+        feature_cols=MODEL_FEATURE_COLS,
+        model_paths=model_paths,
+        vectorizer_path=vectorizer_path,
+        threshold_path=threshold_path,
+        oof_path=oof_path,
+        threshold_report_path=threshold_report_path,
+        threshold=threshold,
+        training_mode="sample" if sample_terms else "full",
+        candidate_config=candidate_config,
+        candidate_stats=stats,
+        positive_reference_rows=len(positives),
+        source_data_sha256=source_hashes,
+        validation_report=threshold_report,
+        revision=git_revision(),
+    )
 
-    # EXP satırı
-    n_pos_used = (full_train["label"] == 1).sum()
-    print(f"\n  EXP-007 icin experiment_log.md satiri:")
-    print(f"  | EXP-007 | 9 Tem | Omer Faruk | LightGBM | Mix(BM25+Rand) 3:1 / "
-          f"{n_pos_used:,} poz | {len(feature_cols)} | "
-          f"{mean_f1:.4f} +/- {std_f1:.4f} | — | "
-          f"v2 full model, thresh={best_thresh}, F1={best_f1:.4f} |")
+    print("[7/7] Training complete")
+    print(f"  candidates: {len(y):,}")
+    print(f"  cross-fitted Macro-F1: {threshold_report['cross_fitted_macro_f1']:.6f}")
+    print(f"  deploy threshold: {threshold:.8f}")
+    print(f"  manifest: {manifest_path}")
+    return manifest_path
 
 
 if __name__ == "__main__":

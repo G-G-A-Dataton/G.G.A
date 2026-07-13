@@ -1,5 +1,12 @@
 # Threshold Analiz Raporu (11 Temmuz)
 
+> [!CAUTION]
+> **Historical, invalidated threshold.** `0.35` came from legacy row-level OOF
+> predictions. Production loads the threshold created by the next full grouped
+> training run; no fixed threshold is currently approved.
+> Current runner: `python scripts/analysis/run_threshold_analysis.py`; new
+> results are written to `docs/threshold_analysis.md`.
+
 **Hazırlayan:** Ahmet Emin Işın  
 **Tarih:** 11 Temmuz 2026  
 **Yöntem:** 5-Fold OOF tahminleri üzerinde threshold taraması
@@ -59,7 +66,7 @@ Bu yüzden optimal threshold 0.5'ten **düşük** çıkar.
 
 ## 4. Sonraki Adımlar
 
-- **Öneri:** Submission'larda threshold = **0.35** kullan
+- **Geçersiz eski öneri:** `0.35` üretimde kullanılmamalıdır.
 - Tam eğitim seti (250K pozitif) üzerinde bu analizi tekrarla (skoru değişebilir)
 - BM25 hard negative ile eğitim yapılırsa optimal threshold farklılaşabilir — yeniden hesapla
 

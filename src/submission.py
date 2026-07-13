@@ -33,8 +33,8 @@ def prepare_submission_features(
     """
     Submission çiftleri için feature'ları hesaplar.
 
-    Büyük submission seti (3.36M satır) için batch işleme kullanılır.
-    Tüm seti bir anda belleğe almak yerine parça parça işlenir.
+    Büyük submission seti (3.36M satır) için feature hesaplamasını batch'ler;
+    döndürülen birleşik DataFrame yine tüm feature setini bellekte tutar.
 
     Parametreler
     ----------
@@ -98,6 +98,7 @@ def generate_submission(
     threshold: float = 0.5,
     batch_size: int = 50_000,
     verbose: bool = True,
+    sample_submission_path: str = None,
 ) -> pd.DataFrame:
     """
     Eğitilmiş model(ler) ile Kaggle formatında submission CSV üretir.
@@ -124,6 +125,8 @@ def generate_submission(
         find_best_threshold() ile belirlenen değer kullanılmalıdır.
     batch_size : int
         Her batch'te işlenecek satır sayısı.
+    sample_submission_path : str, optional
+        Satır sayısı ve ID sırası doğrulaması için referans submission yolu.
 
     Döndürür
     -------
@@ -134,6 +137,12 @@ def generate_submission(
         print("=" * 60)
         print("  G.G.A — Submission Uretimi")
         print("=" * 60)
+    if not models:
+        raise ValueError("At least one model is required")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError("threshold must be between 0 and 1")
 
     # Submission çiftlerini oku
     if verbose:
@@ -145,55 +154,66 @@ def generate_submission(
     if verbose:
         print(f"  Tahmin edilecek cift sayisi: {len(sub_df):,}")
 
-    # Feature'ları hesapla
     if verbose:
-        print("\n[2/4] Feature'lar hesaplaniyor...")
-    sub_features = prepare_submission_features(
-        sub_df, terms_df, items_df,
-        vectorizer=vectorizer,
-        feature_cols=feature_cols,
-        batch_size=batch_size,
-        verbose=verbose
-    )
+        print(f"\n[2/4] Batch feature ve {len(models)}-model ensemble tahmini...")
+    prediction_chunks = []
+    for start in range(0, len(sub_df), batch_size):
+        end = min(start + batch_size, len(sub_df))
+        batch = sub_df.iloc[start:end].copy()
+        batch = batch.merge(
+            terms_df, on="term_id", how="left", validate="many_to_one"
+        ).merge(items_df, on="item_id", how="left", validate="many_to_one")
+        if batch[["query", "title"]].isna().any().any():
+            raise ValueError(f"Unresolved term_id or item_id in rows {start}:{end}")
+        batch = build_features(batch)
+        if vectorizer is not None:
+            batch = add_tfidf_features(batch, vectorizer, batch_size=batch_size)
+        X_batch = batch[feature_cols]
+        probabilities = np.vstack(
+            [model.predict(X_batch) for model in models]
+        ).mean(axis=0)
+        prediction_chunks.append((probabilities >= threshold).astype(np.int8))
+        if verbose:
+            print(f"  ... {end:,}/{len(sub_df):,} satir islendi")
 
-    # Model(ler) ile tahmin yap — ensemble (ortalama)
-    if verbose:
-        print(f"\n[3/4] {len(models)} model ile tahmin yapiliyor (ensemble)...")
-    X_sub = sub_features[feature_cols]  # Model, sadece bu kolonları görecek — sıralama önemli!
-
-    # Her fold'un modeli tahmin üretiyor; listeyi oluşturuyoruz
-    proba_list = [model.predict(X_sub) for model in models]
-
-    # Ensemble: tüm fold modellerinin olasılık tahminlerini ortalıyoruz.
-    # Ortalama, tek bir modelin aşırı uyumu (overfit) durumunu düzeltiyor.
-    avg_proba = np.mean(proba_list, axis=0)
-
-    # Olasılık (0.0-1.0) → Binary tahmin (0 veya 1)
-    # avg_proba >= threshold ise "alakalı (1)", aksi hâlde "alakasız (0)"
-    predictions = (avg_proba >= threshold).astype(int)
+    predictions = np.concatenate(prediction_chunks)
     pos_rate = predictions.mean()
     if verbose:
         print(f"  Threshold         : {threshold}")
         print(f"  Pozitif oran      : {pos_rate:.2%}  ({predictions.sum():,} adet '1')")
 
     # Submission DataFrame'ini oluştur
-    # id kolonu: sub_features["id"] → merge sonrası orijinal ID'ler korunuyor mu kontrol et!
-    # .values ile numpy dizisine al — index karışıklığını önler
+    # The source order is preserved across batch prediction.
     submission_out = pd.DataFrame({
-        "id"        : sub_features["id"].values,
+        "id"        : sub_df["id"].values,
         "prediction": predictions
     })
 
     # Dosyaya kaydet
     if verbose:
         print(f"\n[4/4] Submission dosyasi kaydediliyor: {output_path}")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    submission_out.to_csv(output_path, index=False)
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    temporary_output = output_path + ".tmp"
+    submission_out.to_csv(temporary_output, index=False)
 
     # Format doğrulaması
     if verbose:
         print("\nFormat dogrulamasi yapiliyor...")
-    validate_submission(output_path, verbose=verbose)
+    if sample_submission_path is None:
+        candidate = os.path.join(
+            os.path.dirname(os.path.abspath(submission_pairs_path)),
+            "sample_submission.csv",
+        )
+        sample_submission_path = candidate if os.path.exists(candidate) else None
+    if not validate_submission(
+        temporary_output,
+        sample_submission_path=sample_submission_path,
+        expected_rows=len(sub_df),
+        verbose=verbose,
+    ):
+        os.remove(temporary_output)
+        raise RuntimeError("Generated submission failed validation")
+    os.replace(temporary_output, output_path)
 
     if verbose:
         print(f"\n[HAZIR] Submission: {output_path}")
@@ -201,58 +221,19 @@ def generate_submission(
     return submission_out
 
 
-def run_submission_pipeline(threshold: float = 0.5):
+def run_submission_pipeline(threshold: float = None):
     """
     Tam submission pipeline'ını baştan sona çalıştırır.
 
-    Eğitilmiş bir model yoksa önce run_baseline.py veya
-    run_baseline_tfidf.py çalıştırılmalıdır.
+    Canonical manifest-doğrulamalı inference pipeline'ını çalıştırır.
     """
-    import pickle
-    import lightgbm as lgb
-    from src.data import load_terms, load_items
+    from pipeline.inference import main
 
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    DATA_DIR     = os.path.join(PROJECT_ROOT, "datasets")
-    OUTPUT_DIR   = os.path.join(PROJECT_ROOT, "outputs")
-
-    print("[submission] Veriler yukleniyor...")
-    terms_df = load_terms(os.path.join(DATA_DIR, "terms.csv"))
-    items_df  = load_items(os.path.join(DATA_DIR, "items.csv"))
-
-    # Kaydedilmiş modeli yükle
-    model_path = os.path.join(OUTPUT_DIR, "lgbm_model.txt")
-    if not os.path.exists(model_path):
-        print(f"[HATA] Model bulunamadi: {model_path}")
-        print("Once run_baseline.py veya run_baseline_tfidf.py calistirin.")
-        return
-
-    model = lgb.Booster(model_file=model_path)
-    models = [model]
-
-    # TF-IDF vectorizer
-    vec_path = os.path.join(OUTPUT_DIR, "tfidf_vectorizer.pkl")
-    vectorizer = None
-    if os.path.exists(vec_path):
-        with open(vec_path, "rb") as f:
-            vectorizer = pickle.load(f)
-        print(f"[submission] TF-IDF vectorizer yuklendi: {vec_path}")
-
-    from src.features import FEATURE_COLS
-    feature_cols = FEATURE_COLS + (["tfidf_cosine"] if vectorizer else [])
-
-    generate_submission(
-        models=models,
-        terms_df=terms_df,
-        items_df=items_df,
-        feature_cols=feature_cols,
-        submission_pairs_path=os.path.join(DATA_DIR, "submission_pairs.csv"),
-        output_path=os.path.join(OUTPUT_DIR, "submission_v1.csv"),
-        vectorizer=vectorizer,
-        threshold=threshold,
-        verbose=True
-    )
+    arguments = ["--mode", "predict"]
+    if threshold is not None:
+        arguments.extend(["--threshold", str(threshold)])
+    return main(arguments)
 
 
 if __name__ == "__main__":
-    run_submission_pipeline(threshold=0.45)
+    run_submission_pipeline()

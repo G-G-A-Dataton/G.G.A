@@ -1,5 +1,9 @@
 # Sprint 2 Raporu — 6–9 Temmuz 2026
 
+> [!NOTE]
+> Historical sprint record. Numeric model results require a rerun under the
+> current grouped validation, leakage-free sampling, and feature contracts.
+
 **Hazırlayan:** Ömer Faruk Kara (Kaptan)  
 **Tarih:** 9 Temmuz 2026  
 **Kapsam:** 6 Temmuz – 9 Temmuz 2026 (Sprint 2)
@@ -107,8 +111,9 @@ Tüm scriptler yeni parametrelerle güncellendi.
 | EXP-005 | LightGBM | Random 3:1 / 3K poz / 12 feat | 0.9622 ± 0.0022 | — | Hard neg baseline |
 | EXP-007 | LightGBM | Mix 3:1 / 250K poz / 16 feat | **⏳ Bekleniyor** | — | Tam model |
 
-> **Kritik Not:** Kaggle LB skoru hâlâ bilinmiyor. EXP-007 çalıştırıldıktan sonra
-> `submission_v2.csv` Kaggle'a yüklenmelidir.
+> **Güncel güvenlik notu:** Bu rapordaki EXP-007 tanımı artık geçerli bir model
+> sonucu değildir. Kök `RUNBOOK.md` ile tam eğitim ve kanonik inference yeniden
+> çalıştırılmadan hiçbir eski artifact veya submission yüklenmemelidir.
 
 ---
 
@@ -116,8 +121,8 @@ Tüm scriptler yeni parametrelerle güncellendi.
 
 | Tarih | Öncelik | Görev |
 |---|---|---|
-| **10 Temmuz** | 🔴 KRİTİK | `python run_train_full_v2.py` çalıştır → EXP-007 skoru al |
-| **10 Temmuz** | 🔴 KRİTİK | `python run_full_submission_v2.py` → **Kaggle'a yükle!** |
+| **10 Temmuz** | Tarihsel | Eski tam eğitim görevi geçersiz; güncel akış için kök `RUNBOOK.md` kullanılır. |
+| **10 Temmuz** | Tarihsel | Eski submission komutu geçersiz; güncel akış için kök `RUNBOOK.md` kullanılır. |
 | 10 Temmuz | Yüksek | Feature importance analizi (tam 250K modelde) |
 | 12 Temmuz | Orta | Embedding cosine PoC (sentence-transformers) |
 | 14 Temmuz | Orta | Sonuç analizi ve model seçimi |

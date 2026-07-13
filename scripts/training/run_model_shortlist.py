@@ -1,241 +1,388 @@
-"""
-scripts/training/run_model_shortlist.py
-=======================================
-G.G.A Takımı — Model Shortlist & Validation Tahminleri (14 Temmuz Görevi)
+"""Train LightGBM/XGBoost grouped OOF models and stream test predictions."""
 
-Ömer Faruk Kara tarafından hazırlanmıştır.
-
-Bu script:
-  1. En iyi iki modeli (LightGBM Tuned ve XGBoost Tuned) eğitir.
-  2. 5-Fold Stratified CV kullanarak her iki model için Out-of-Fold (OOF)
-     tahmin olasılıklarını üretir.
-  3. Test/Submission veri seti üzerinde tahmin olasılıklarını hesaplar.
-  4. Daha sonra ensemble ağırlıklandırması ve ortak optimizasyon yapmak üzere
-     OOF ve test tahminlerini diske kaydeder (npy formatında).
-
-Çalıştırmak için (tüm veri):
-  python scripts/training/run_model_shortlist.py
-
-Hızlı test için (örn. 5K pozitif, 10K test):
-  python scripts/training/run_model_shortlist.py --sample 5000 --test-sample 10000
-"""
-
+import argparse
+import gc
 import os
 import sys
-import argparse
-import warnings
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
+import xgboost as xgb
 
-warnings.filterwarnings("ignore")
 
-# Proje kök dizinini sys.path'e ekle
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.data              import load_terms, load_items
-from src.features          import build_features, FEATURE_COLS
-from src.tfidf_features    import build_tfidf_vectorizer, add_tfidf_features, save_vectorizer
-from src.train_mix_v2      import build_mixed_training_set
-from src.metrics           import get_stratified_kfold, macro_f1_from_proba, find_best_threshold
+from scripts.training.run_train_full_v2 import git_revision, sha256_file
+from src.candidate_sampling import (
+    build_test_shaped_training_set,
+    candidate_distribution,
+    sample_complete_terms,
+)
+from src.context_features import add_context_features
+from src.data import load_items, load_terms
+from src.features import build_features
+from src.metrics import macro_f1_from_proba
+from src.modeling import (
+    MODEL_FEATURE_COLS,
+    build_group_fold_ids,
+    cross_fitted_ensemble_evaluation,
+    cross_fitted_threshold_evaluation,
+)
+from src.oof_artifacts import EXPECTED_TEST_ROWS, write_oof_manifest
+from src.out_of_core_features import (
+    build_base_feature_store,
+    build_context_feature_store,
+    load_feature_batch,
+    remove_feature_stores,
+)
+from src.tfidf_features import (
+    add_tfidf_features,
+    build_tfidf_vectorizer,
+    save_vectorizer,
+)
 
-try:
-    import xgboost as xgb
-    XGB_AVAILABLE = True
-except ImportError:
-    XGB_AVAILABLE = False
 
-DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
+DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+PRODUCTION_ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
 RANDOM_SEED = 42
-NEGATIVE_RATIO = 2  # Deney matrisinde en iyi sonuç veren oran
+N_SPLITS = 5
 
-# LightGBM Tuned Parametreleri
 LGBM_PARAMS = {
-    "objective"        : "binary",
-    "metric"           : "binary_logloss",
-    "learning_rate"    : 0.05,
-    "num_leaves"       : 31,
-    "min_child_samples": 20,
-    "subsample"        : 0.8,
-    "colsample_bytree" : 0.8,
-    "verbose"          : -1,
-    "random_state"     : RANDOM_SEED,
-    "n_jobs"           : -1,
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "learning_rate": 0.04,
+    "num_leaves": 63,
+    "min_child_samples": 100,
+    "feature_fraction": 0.85,
+    "bagging_fraction": 0.85,
+    "bagging_freq": 1,
+    "reg_alpha": 0.2,
+    "reg_lambda": 1.5,
+    "deterministic": True,
+    "force_col_wise": True,
+    "seed": RANDOM_SEED,
+    "num_threads": -1,
+    "verbosity": -1,
 }
-
-# XGBoost Tuned Parametreleri
 XGB_PARAMS = {
-    "objective"        : "binary:logistic",
-    "eval_metric"      : "logloss",
-    "learning_rate"    : 0.05,
-    "max_depth"        : 6,
-    "min_child_weight" : 1,
-    "subsample"        : 0.8,
-    "colsample_bytree" : 0.8,
-    "seed"             : RANDOM_SEED,
-    "n_jobs"           : -1,
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "tree_method": "hist",
+    "learning_rate": 0.04,
+    "max_depth": 7,
+    "min_child_weight": 8,
+    "subsample": 0.85,
+    "colsample_bytree": 0.85,
+    "reg_alpha": 0.2,
+    "reg_lambda": 1.5,
+    "seed": RANDOM_SEED,
+    "nthread": -1,
 }
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Model Shortlist & OOF Tahmin Export")
-    parser.add_argument("--sample", type=int, default=None, help="Hizli test icin pozitif ornek sayisi")
-    parser.add_argument("--test-sample", type=int, default=None, help="Hizli test icin test ornek sayisi")
-    return parser.parse_args()
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Grouped shortlist and OOF export")
+    parser.add_argument(
+        "--sample-terms", "--sample", dest="sample_terms", type=int, default=None
+    )
+    parser.add_argument("--test-sample", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=100_000)
+    parser.add_argument("--num-boost-round", type=int, default=1_200)
+    parser.add_argument("--early-stopping-rounds", type=int, default=80)
+    parser.add_argument("--artifact-dir", default=None)
+    return parser.parse_args(argv)
 
 
-def train_and_predict_oof(X, y, X_test, model_type="lgbm"):
-    """
-    5-Fold Stratified CV ile OOF ve Test tahminlerini üretir.
-    """
-    skf = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
-    oof_preds = np.zeros(len(X))
-    test_preds = np.zeros(len(X_test))
-
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
-        print(f"  [{model_type.upper()}] Fold {fold}/5 eğitiliyor...", flush=True)
-
-        X_train, y_train = X.iloc[tr_idx], y.iloc[tr_idx]
-        X_val, y_val = X.iloc[val_idx], y.iloc[val_idx]
-
-        if model_type == "lgbm":
-            dtrain = lgb.Dataset(X_train, label=y_train)
-            dval = lgb.Dataset(X_val, label=y_val, reference=dtrain)
-            
-            model = lgb.train(
-                LGBM_PARAMS, dtrain,
-                num_boost_round=1000,
-                valid_sets=[dval],
-                callbacks=[
-                    lgb.early_stopping(50, verbose=False),
-                    lgb.log_evaluation(period=0)
-                ]
-            )
-            oof_preds[val_idx] = model.predict(X_val)
-            test_preds += model.predict(X_test) / 5.0
-
-        elif model_type == "xgb":
-            dtrain = xgb.DMatrix(X_train, label=y_train)
-            dval = xgb.DMatrix(X_val, label=y_val)
-            dtest = xgb.DMatrix(X_test)
-
-            model = xgb.train(
-                XGB_PARAMS, dtrain,
-                num_boost_round=1000,
-                evals=[(dval, "val")],
-                early_stopping_rounds=50,
-                verbose_eval=False
-            )
-            oof_preds[val_idx] = model.predict(dval)
-            test_preds += model.predict(dtest) / 5.0
-
-    return oof_preds, test_preds
+def _sample_terms_from_args(args):
+    value = getattr(args, "sample_terms", None)
+    return value if value is not None else getattr(args, "sample", None)
 
 
-def main():
-    args = parse_args()
+def _atomic_save(path, values):
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "wb") as output_file:
+        np.save(output_file, values, allow_pickle=False)
+    os.replace(temporary_path, path)
 
-    print("=" * 65)
-    print("  G.G.A — Model Shortlist & Validation Tahminleri")
-    print("=" * 65)
 
-    if not XGB_AVAILABLE:
-        print("[HATA] XGBoost kütüphanesi yüklü değil!")
-        sys.exit(1)
+def _xgb_predict(model, matrix):
+    iteration_range = (
+        (0, model.best_iteration + 1)
+        if getattr(model, "best_iteration", None) is not None
+        else (0, 0)
+    )
+    return model.predict(matrix, iteration_range=iteration_range)
 
-    # 1. Verileri Yükle
-    print("\n[1/5] Veriler yukleniyor...")
-    terms_df = load_terms(os.path.join(DATA_DIR, "terms.csv"))
-    items_df = load_items(os.path.join(DATA_DIR, "items.csv"))
-    train_raw = pd.read_csv(
+
+def prepare_training_data(args, artifact_dir, sample_terms):
+    terms = load_terms(os.path.join(DATA_DIR, "terms.csv"))
+    items = load_items(os.path.join(DATA_DIR, "items.csv"))
+    positives = pd.read_csv(
         os.path.join(DATA_DIR, "training_pairs.csv"),
-        dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
+        dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"},
     )
-
-    if args.sample:
-        print(f"  Eğitim seti pozitif örnekleniyor: {args.sample:,} satır")
-        train_raw = train_raw.sample(args.sample, random_state=RANDOM_SEED).reset_index(drop=True)
-
-    # 2. Negatif Örnekleme ve Feature Pipeline
-    print("\n[2/5] Karisik negatif egitim seti hazirlaniyor...")
-    full_train = build_mixed_training_set(
-        train_raw, terms_df, items_df,
-        ratio=NEGATIVE_RATIO,
-        bm25_top_n=50,
-        bm25_max_df_ratio=0.15,
+    if len(positives) != 250_000 or not (positives["label"] == 1).all():
+        raise ValueError("training_pairs.csv does not satisfy the positive contract")
+    selected = (
+        sample_complete_terms(positives, sample_terms, RANDOM_SEED)
+        if sample_terms
+        else positives
+    )
+    candidates = build_test_shaped_training_set(
+        selected,
+        items,
+        positive_reference_df=positives,
+        min_candidates=100,
+        dense_multiplier=2.0,
+        category_hard_fraction=0.5,
         random_state=RANDOM_SEED,
-        verbose=True
     )
-    
-    merged = full_train.merge(terms_df, on="term_id", how="left")
-    merged = merged.merge(items_df, on="item_id", how="left")
-    merged = build_features(merged)
+    merged = candidates.merge(
+        terms, on="term_id", how="left", validate="many_to_one"
+    ).merge(items, on="item_id", how="left", validate="many_to_one")
+    merged = build_features(merged, copy=False)
+    vectorizer = build_tfidf_vectorizer(
+        terms, items, max_features=10_000, ngram_range=(1, 1), min_df=2
+    )
+    vectorizer_path = os.path.join(artifact_dir, "tfidf_vectorizer.pkl")
+    save_vectorizer(vectorizer, vectorizer_path)
+    merged = add_tfidf_features(merged, vectorizer, copy=False)
+    merged = add_context_features(merged, copy=False)
+    X = merged[MODEL_FEATURE_COLS].astype("float32")
+    y = merged["label"].to_numpy(dtype=np.int8)
+    groups = merged["term_id"].to_numpy()
+    fold_ids = build_group_fold_ids(y, groups, n_splits=N_SPLITS, random_state=42)
+    return {
+        "terms": terms,
+        "items": items,
+        "positives": positives,
+        "candidates": candidates,
+        "vectorizer": vectorizer,
+        "vectorizer_path": vectorizer_path,
+        "X": X,
+        "y": y,
+        "fold_ids": fold_ids,
+    }
 
-    # TF-IDF fit & transform
-    print("  TF-IDF vectorizer egitiliyor...")
-    vectorizer = build_tfidf_vectorizer(terms_df, items_df, max_features=10000, ngram_range=(1, 1))
-    merged = add_tfidf_features(merged, vectorizer)
-    save_vectorizer(vectorizer, os.path.join(OUTPUT_DIR, "tfidf_vectorizer_v2.pkl"))
 
-    # Test/Submission setini yükle ve hazırla
-    sub_path = os.path.join(DATA_DIR, "submission_pairs.csv")
-    print(f"\n[3/5] Test seti yukleniyor: {sub_path}")
-    sub_df = pd.read_csv(sub_path, dtype={"id": "string", "term_id": "string", "item_id": "string"})
+def _train_oof(data, args, artifact_dir):
+    X = data["X"]
+    y = data["y"]
+    fold_ids = data["fold_ids"]
+    oof_lgbm = np.zeros(len(y), dtype=np.float32)
+    oof_xgb = np.zeros(len(y), dtype=np.float32)
+    lgbm_models = []
+    xgb_models = []
+    model_files = []
 
-    if args.test_sample:
-        print(f"  Test seti örnekleniyor: {args.test_sample:,} satır")
-        sub_df = sub_df.sample(args.test_sample, random_state=RANDOM_SEED).reset_index(drop=True)
+    for fold in range(N_SPLITS):
+        train_index = np.flatnonzero(fold_ids != fold)
+        validation_index = np.flatnonzero(fold_ids == fold)
+        lgb_train = lgb.Dataset(X.iloc[train_index], label=y[train_index])
+        lgb_validation = lgb.Dataset(
+            X.iloc[validation_index], label=y[validation_index], reference=lgb_train
+        )
+        lgb_model = lgb.train(
+            LGBM_PARAMS,
+            lgb_train,
+            num_boost_round=getattr(args, "num_boost_round", 1_200),
+            valid_sets=[lgb_validation],
+            callbacks=[
+                lgb.early_stopping(
+                    getattr(args, "early_stopping_rounds", 80), verbose=False
+                ),
+                lgb.log_evaluation(period=0),
+            ],
+        )
+        oof_lgbm[validation_index] = lgb_model.predict(
+            X.iloc[validation_index], num_iteration=lgb_model.best_iteration
+        )
+        lgb_filename = f"lgbm_fold_{fold + 1}.txt"
+        lgb_path = os.path.join(artifact_dir, lgb_filename)
+        lgb_temp = lgb_path + ".tmp"
+        lgb_model.save_model(lgb_temp, num_iteration=lgb_model.best_iteration)
+        os.replace(lgb_temp, lgb_path)
+        lgbm_models.append(lgb_model)
+        model_files.append(lgb_filename)
 
-    sub_merged = sub_df.merge(terms_df, on="term_id", how="left")
-    sub_merged = sub_merged.merge(items_df, on="item_id", how="left")
-    sub_merged = build_features(sub_merged)
-    sub_merged = add_tfidf_features(sub_merged, vectorizer)
+        xgb_train = xgb.DMatrix(X.iloc[train_index], label=y[train_index])
+        xgb_validation = xgb.DMatrix(
+            X.iloc[validation_index], label=y[validation_index]
+        )
+        xgb_model = xgb.train(
+            XGB_PARAMS,
+            xgb_train,
+            num_boost_round=getattr(args, "num_boost_round", 1_200),
+            evals=[(xgb_validation, "validation")],
+            early_stopping_rounds=getattr(args, "early_stopping_rounds", 80),
+            verbose_eval=False,
+        )
+        oof_xgb[validation_index] = _xgb_predict(xgb_model, xgb_validation)
+        xgb_filename = f"xgb_fold_{fold + 1}.json"
+        xgb_path = os.path.join(artifact_dir, xgb_filename)
+        xgb_temp = xgb_path + ".tmp.json"
+        xgb_model.save_model(xgb_temp)
+        os.replace(xgb_temp, xgb_path)
+        xgb_models.append(xgb_model)
+        model_files.append(xgb_filename)
+        del xgb_train, xgb_validation
+        gc.collect()
 
-    feature_cols = FEATURE_COLS + ["tfidf_cosine"]
-    X = merged[feature_cols]
-    y = merged["label"]
-    X_test = sub_merged[feature_cols]
+        print(
+            f"  fold={fold + 1} "
+            f"lgbm_f1={macro_f1_from_proba(y[validation_index], oof_lgbm[validation_index]):.6f} "
+            f"xgb_f1={macro_f1_from_proba(y[validation_index], oof_xgb[validation_index]):.6f}"
+        )
 
-    print(f"  Tren boyutu : {X.shape}")
-    print(f"  Test boyutu : {X_test.shape}")
-    print(f"  Öznitelikler: {feature_cols}")
+    return oof_lgbm, oof_xgb, lgbm_models, xgb_models, model_files
 
-    # 3. Model Adaylarını Eğit & OOF Tahminleri Çıkar
-    print("\n[4/5] Shortlist model adaylarinin egitimi basliyor...")
-    
-    # Model A: LightGBM
-    oof_lgbm, test_lgbm = train_and_predict_oof(X, y, X_test, model_type="lgbm")
-    f1_lgbm = macro_f1_from_proba(y, oof_lgbm, threshold=0.5)
-    best_th_lgb, best_f1_lgb, _ = find_best_threshold(y.values, oof_lgbm)
-    print(f"  -> LightGBM Default F1 (0.50): {f1_lgbm:.4f} | Best F1 ({best_th_lgb:.2f}): {best_f1_lgb:.4f}")
 
-    # Model B: XGBoost
-    oof_xgb, test_xgb = train_and_predict_oof(X, y, X_test, model_type="xgb")
-    f1_xgb = macro_f1_from_proba(y, oof_xgb, threshold=0.5)
-    best_th_xgb, best_f1_xgb, _ = find_best_threshold(y.values, oof_xgb)
-    print(f"  -> XGBoost  Default F1 (0.50): {f1_xgb:.4f} | Best F1 ({best_th_xgb:.2f}): {best_f1_xgb:.4f}")
+def _stream_test_predictions(data, models, args, artifact_dir, test_rows):
+    lgbm_models, xgb_models = models
+    temp_lgbm = os.path.join(artifact_dir, "test_lgbm.npy.tmp")
+    temp_xgb = os.path.join(artifact_dir, "test_xgb.npy.tmp")
+    test_lgbm = np.lib.format.open_memmap(
+        temp_lgbm, mode="w+", dtype="float32", shape=(test_rows,)
+    )
+    test_xgb = np.lib.format.open_memmap(
+        temp_xgb, mode="w+", dtype="float32", shape=(test_rows,)
+    )
+    store_prefix = os.path.join(artifact_dir, f".shortlist_features_{os.getpid()}")
+    store_paths = []
+    offset = 0
+    try:
+        base_path, codes_path = build_base_feature_store(
+            os.path.join(DATA_DIR, "submission_pairs.csv"),
+            data["terms"],
+            data["items"],
+            data["vectorizer"],
+            row_count=test_rows,
+            batch_size=getattr(args, "batch_size", 100_000),
+            output_prefix=store_prefix,
+        )
+        store_paths.extend([base_path, codes_path])
+        context_path = build_context_feature_store(
+            base_path, codes_path, store_prefix
+        )
+        store_paths.append(context_path)
+        base_store = np.load(base_path, mmap_mode="r")
+        context_store = np.load(context_path, mmap_mode="r")
+        for start in range(0, test_rows, getattr(args, "batch_size", 100_000)):
+            end = min(start + getattr(args, "batch_size", 100_000), test_rows)
+            X_batch = load_feature_batch(base_store, context_store, start, end)
+            lgb_values = np.mean(
+                [model.predict(X_batch) for model in lgbm_models], axis=0
+            )
+            xgb_matrix = xgb.DMatrix(X_batch)
+            xgb_values = np.mean(
+                [_xgb_predict(model, xgb_matrix) for model in xgb_models], axis=0
+            )
+            test_lgbm[start:end] = lgb_values
+            test_xgb[start:end] = xgb_values
+            offset = end
+            print(f"  test predictions: {offset:,}/{test_rows:,}")
+    finally:
+        remove_feature_stores(*store_paths)
+    if offset != test_rows:
+        raise RuntimeError(f"Test prediction rows mismatch: {offset:,} != {test_rows:,}")
+    test_lgbm.flush()
+    test_xgb.flush()
+    del test_lgbm, test_xgb
+    os.replace(temp_lgbm, os.path.join(artifact_dir, "test_lgbm.npy"))
+    os.replace(temp_xgb, os.path.join(artifact_dir, "test_xgb.npy"))
 
-    # 4. Tahminleri Dışa Aktar (Export)
-    print("\n[5/5] OOF ve test tahminleri kaydediliyor...")
-    np.save(os.path.join(OUTPUT_DIR, "oof_lgbm.npy"), oof_lgbm)
-    np.save(os.path.join(OUTPUT_DIR, "test_lgbm.npy"), test_lgbm)
-    np.save(os.path.join(OUTPUT_DIR, "oof_xgb.npy"), oof_xgb)
-    np.save(os.path.join(OUTPUT_DIR, "test_xgb.npy"), test_xgb)
-    np.save(os.path.join(OUTPUT_DIR, "y_true.npy"), y.values)
-    
-    # Test setindeki ID'leri de kaydet ki eşleştirebilelim
-    sub_df[["id", "term_id", "item_id"]].to_csv(os.path.join(OUTPUT_DIR, "test_metadata.csv"), index=False)
 
-    print("\n[OK] Tüm adımlar başarıyla tamamlandı!")
-    print(f"  OOF LGBM  : {os.path.join(OUTPUT_DIR, 'oof_lgbm.npy')}")
-    print(f"  Test LGBM : {os.path.join(OUTPUT_DIR, 'test_lgbm.npy')}")
-    print(f"  OOF XGB   : {os.path.join(OUTPUT_DIR, 'oof_xgb.npy')}")
-    print(f"  Test XGB  : {os.path.join(OUTPUT_DIR, 'test_xgb.npy')}")
-    print("=" * 65)
+def main(argv=None):
+    args = parse_args(argv) if argv is not None else parse_args()
+    sample_terms = _sample_terms_from_args(args)
+    test_sample = getattr(args, "test_sample", None)
+    if sample_terms is not None and sample_terms <= 0:
+        raise ValueError("--sample-terms must be positive")
+    if test_sample is not None and test_sample <= 0:
+        raise ValueError("--test-sample must be positive")
+    if getattr(args, "batch_size", 1) <= 0:
+        raise ValueError("--batch-size must be positive")
+    artifact_dir = os.path.abspath(
+        getattr(args, "artifact_dir", None)
+        or (
+            os.path.join(OUTPUT_DIR, "ensemble_sample_artifacts")
+            if sample_terms or test_sample
+            else PRODUCTION_ARTIFACT_DIR
+        )
+    )
+    if (sample_terms or test_sample) and os.path.realpath(
+        artifact_dir
+    ) == os.path.realpath(PRODUCTION_ARTIFACT_DIR):
+        raise ValueError("Sample OOF runs cannot overwrite production ensemble artifacts")
+    os.makedirs(artifact_dir, exist_ok=True)
+    test_rows = test_sample or (50_000 if sample_terms else EXPECTED_TEST_ROWS)
+    if test_rows > EXPECTED_TEST_ROWS:
+        raise ValueError(f"--test-sample cannot exceed {EXPECTED_TEST_ROWS}")
+
+    print("[1/5] Preparing shared test-shaped training matrix")
+    data = prepare_training_data(args, artifact_dir, sample_terms)
+    print("[2/5] Training grouped LightGBM and XGBoost OOF models")
+    oof_lgbm, oof_xgb, lgb_models, xgb_models, model_files = _train_oof(
+        data, args, artifact_dir
+    )
+    print("[3/5] Evaluating thresholds and blend without fold leakage")
+    lgb_report = cross_fitted_threshold_evaluation(
+        data["y"], oof_lgbm, data["fold_ids"]
+    )
+    xgb_report = cross_fitted_threshold_evaluation(
+        data["y"], oof_xgb, data["fold_ids"]
+    )
+    blend_report = cross_fitted_ensemble_evaluation(
+        data["y"], oof_lgbm, oof_xgb, data["fold_ids"]
+    )
+    print(
+        f"  cross-fitted F1: LGBM={lgb_report['cross_fitted_macro_f1']:.6f} "
+        f"XGB={xgb_report['cross_fitted_macro_f1']:.6f} "
+        f"blend={blend_report['cross_fitted_macro_f1']:.6f}"
+    )
+
+    print("[4/5] Streaming test predictions to memory-mapped arrays")
+    _stream_test_predictions(
+        data, (lgb_models, xgb_models), args, artifact_dir, test_rows
+    )
+    _atomic_save(os.path.join(artifact_dir, "oof_lgbm.npy"), oof_lgbm)
+    _atomic_save(os.path.join(artifact_dir, "oof_xgb.npy"), oof_xgb)
+    _atomic_save(os.path.join(artifact_dir, "y_true.npy"), data["y"])
+    _atomic_save(os.path.join(artifact_dir, "fold_ids.npy"), data["fold_ids"])
+
+    print("[5/5] Writing hash-verified shortlist manifest")
+    source_names = [
+        "terms.csv",
+        "items.csv",
+        "training_pairs.csv",
+        "submission_pairs.csv",
+    ]
+    manifest_path = write_oof_manifest(
+        output_dir=artifact_dir,
+        training_mode="sample" if sample_terms else "full",
+        test_mode="sample" if test_rows != EXPECTED_TEST_ROWS else "full",
+        training_stats=candidate_distribution(data["candidates"]),
+        test_rows=test_rows,
+        candidate_config={
+            "min_candidates": 100,
+            "dense_multiplier": 2.0,
+            "category_hard_fraction": 0.5,
+            "random_state": 42,
+        },
+        positive_reference_rows=len(data["positives"]),
+        source_data_sha256={
+            name: sha256_file(os.path.join(DATA_DIR, name)) for name in source_names
+        },
+        model_files=model_files,
+        support_files=[os.path.basename(data["vectorizer_path"])],
+        code_revision=git_revision(),
+        feature_columns=MODEL_FEATURE_COLS,
+    )
+    print(f"  manifest: {manifest_path}")
+    return manifest_path
 
 
 if __name__ == "__main__":
