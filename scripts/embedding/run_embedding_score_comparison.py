@@ -11,8 +11,7 @@ katkisini olcer. Iki ayar karsilastirilir:
   LGBM_BASE  : 15 temel feature (tfidf dahil, embedding yok)
   LGBM_EMB   : 15 temel feature + embedding_cosine
 
-Embedding dosyasi varsa gercek cosine kullanilir.
-Yoksa sentetik cosine uretilir (PoC amacli).
+Yalnizca manifest ile doğrulanmış gerçek embedding artifactleri kullanılır.
 
 Calistirmak icin:
   python run_embedding_score_comparison.py
@@ -35,10 +34,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.data              import load_terms, load_items
-from src.features          import build_features, FEATURE_COLS
-from src.negative_sampling import build_training_set
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
+from src.candidate_sampling import build_test_shaped_training_set, sample_complete_terms
+from src.context_features import add_context_features
+from src.features          import build_features
+from src.metrics           import macro_f1_from_proba, get_stratified_group_kfold
 from src.embedding_cosine  import add_embedding_cosine_feature, load_embedding_indexes
+from src.modeling import MODEL_FEATURE_COLS, build_group_fold_ids, cross_fitted_threshold_evaluation
+from src.tfidf_features import build_tfidf_vectorizer, add_tfidf_features
 import lightgbm as lgb
 
 DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
@@ -46,8 +48,7 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 DOCS_DIR   = os.path.join(PROJECT_ROOT, "docs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-SAMPLE_POS  = 3_000
-NEG_RATIO   = 2     # 11 Temmuz deney matrisinden en iyi oran
+SAMPLE_TERMS = 300
 RANDOM_SEED = 42
 
 LGBM_PARAMS = {
@@ -80,9 +81,10 @@ def run_cv(X, y, groups, feature_cols, label=""):
     -------
     dict
     """
-    # Sadece mevcut kolonlari kullan
-    available = [f for f in feature_cols if f in X.columns]
-    X_sub = X[available]
+    missing = sorted(set(feature_cols) - set(X.columns))
+    if missing:
+        raise ValueError(f"Embedding experiment is missing features: {missing}")
+    X_sub = X[feature_cols]
 
     skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     scores    = []
@@ -114,40 +116,18 @@ def run_cv(X, y, groups, feature_cols, label=""):
 
     mean_f1 = float(np.mean(scores))
     std_f1  = float(np.std(scores))
-    best_thresh, best_f1, _ = find_best_threshold(y.values, oof_preds)
+    fold_ids = build_group_fold_ids(y.values, groups.values, n_splits=5)
+    report = cross_fitted_threshold_evaluation(y.values, oof_preds, fold_ids)
 
     return {
         "label"          : label,
-        "n_features"     : len(available),
+        "n_features"     : len(feature_cols),
         "mean_f1"        : round(mean_f1, 4),
         "std_f1"         : round(std_f1, 4),
-        "best_threshold" : best_thresh,
-        "best_f1"        : round(best_f1, 4),
+        "best_threshold" : report["deploy_threshold"],
+        "best_f1"        : round(report["cross_fitted_macro_f1"], 4),
         "train_sec"      : round(elapsed, 1),
     }
-
-
-def make_synthetic_cosine(merged):
-    """
-    Gercek embedding yoksa sinyali simule eden sentetik cosine uretir.
-
-    Pozitif ciftte query_title_overlap yuksek → cosine de yuksek olmali.
-    Bu basit dogrusal donusum bir PoC icin yeterlidir.
-
-    Parametreler
-    ----------
-    merged : pd.DataFrame
-
-    Dondurur
-    -------
-    pd.Series
-    """
-    # Overlap bazli sentetik cosine: gerçekci noise ile
-    rng = np.random.default_rng(RANDOM_SEED)
-    base = merged["query_title_overlap"].fillna(0).values
-    noise = rng.normal(0, 0.05, size=len(base))
-    synthetic = np.clip(base + noise, 0, 1).astype(np.float32)
-    return pd.Series(synthetic, index=merged.index, name=EMBEDDING_FEATURE)
 
 
 if __name__ == "__main__":
@@ -164,36 +144,34 @@ if __name__ == "__main__":
         dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
     )
 
-    pos_sample = train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED)
-    full_train = build_training_set(
-        pos_sample, items_df, ratio=NEG_RATIO,
-        random_state=RANDOM_SEED, verbose=False,
+    pos_sample = sample_complete_terms(train_raw, SAMPLE_TERMS, RANDOM_SEED)
+    full_train = build_test_shaped_training_set(
+        pos_sample, items_df,
         positive_reference_df=train_raw,
+        random_state=RANDOM_SEED, verbose=False,
     )
     merged = full_train.merge(terms_df, on="term_id", how="left")
     merged = merged.merge(items_df,  on="item_id",  how="left")
-    merged = build_features(merged)
+    merged = build_features(merged, copy=False)
+    vectorizer = build_tfidf_vectorizer(terms_df, items_df)
+    merged = add_tfidf_features(merged, vectorizer, copy=False)
+    merged = add_context_features(merged, copy=False)
     groups = merged["term_id"]
-    print(f"  {len(merged):,} satir, {len(FEATURE_COLS)} temel feature hazir")
+    print(f"  {len(merged):,} satir, {len(MODEL_FEATURE_COLS)} temel feature hazir")
 
     # 2. Embedding cosine ekle (gercek veya sentetik)
     print("\n[2/4] Embedding cosine feature hazirlaniyor...")
     term_index, item_index = load_embedding_indexes(PROJECT_ROOT)
 
-    if term_index is not None and item_index is not None:
-        print("  Gercek embedding bulundu — lookup yapiliyor...")
-        merged = add_embedding_cosine_feature(merged, term_index, item_index)
-        emb_source = "gercek"
-    else:
-        print("  Embedding dosyasi yok — sentetik cosine kullaniliyor (PoC)...")
-        merged[EMBEDDING_FEATURE] = make_synthetic_cosine(merged)
-        emb_source = "sentetik"
+    print("  Doğrulanmış gerçek embedding lookup yapılıyor...")
+    merged = add_embedding_cosine_feature(merged, term_index, item_index)
+    emb_source = "manifest_verified"
 
     sep = merged.loc[merged["label"] == 1, EMBEDDING_FEATURE].mean() - \
           merged.loc[merged["label"] == 0, EMBEDDING_FEATURE].mean()
     print(f"  Cosine separation: {sep:.4f}  (kaynak: {emb_source})")
 
-    X = merged[FEATURE_COLS + [EMBEDDING_FEATURE]]
+    X = merged[MODEL_FEATURE_COLS + [EMBEDDING_FEATURE]]
     y = merged["label"]
 
     # 3. CV karsilastirma: baseline vs embedding ekli
@@ -201,12 +179,12 @@ if __name__ == "__main__":
     results = []
 
     print("\n  -- LGBM_BASE (embedding yok) --")
-    r_base = run_cv(X, y, groups, FEATURE_COLS, label="LGBM_BASE")
+    r_base = run_cv(X, y, groups, MODEL_FEATURE_COLS, label="LGBM_BASE")
     results.append(r_base)
 
     print("\n  -- LGBM_EMB (embedding cosine ekli) --")
     r_emb = run_cv(
-        X, y, groups, FEATURE_COLS + [EMBEDDING_FEATURE], label="LGBM_EMB"
+        X, y, groups, MODEL_FEATURE_COLS + [EMBEDDING_FEATURE], label="LGBM_EMB"
     )
     results.append(r_emb)
 
@@ -249,10 +227,6 @@ if __name__ == "__main__":
             f.write(f"| {r['label']} | {r['n_features']} | {r['mean_f1']} | **{r['best_f1']}** | {r['best_threshold']} |\n")
         f.write(f"\n**Embedding cosine etkisi:** `{diff:+.4f}`  \n")
         f.write(f"**Cosine separation:** `{sep:.4f}`  \n\n")
-        if emb_source == "sentetik":
-            f.write("> [!WARNING]\n> Sonuclar sentetik cosine ile uretildi. "
-                    "Gercek embedding uretimi tamamlaninca (`run_term_embeddings.py` + "
-                    "`src/embedding_batch.py --target items`) bu scripti tekrar calistir.\n")
         f.write(f"\n*CSV: `outputs/embedding_skor_kiyasi.csv`*\n")
 
     print(f"\n  CSV  : {out_csv}")

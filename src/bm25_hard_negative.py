@@ -44,10 +44,13 @@ hard negative'i karıştırıp eksikleri random ile tamamlamak Gün 9
 görevi (`train_mix_v2`) kapsamına giriyor, burada değil.
 """
 
-from collections import defaultdict
+from array import array
+from collections import Counter, defaultdict
 
 import numpy as np
 import pandas as pd
+
+from src.text_utils import normalize_for_matching
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,7 +65,7 @@ def standardize_item_text(items_df: pd.DataFrame) -> pd.Series:
     "/" boşlukla değiştirilir) — böylece BM25 ve TF-IDF aynı kelime
     dağarcığı mantığından besleniyor.
     """
-    category_flat = items_df["category"].astype(str).str.replace("/", " ", regex=False)
+    category_flat = items_df["category"].astype("string").str.replace("/", " ", regex=False)
     return (
         items_df["title"].fillna("") + " " +
         category_flat.fillna("") + " " +
@@ -73,7 +76,7 @@ def standardize_item_text(items_df: pd.DataFrame) -> pd.Series:
 def _tokenize(text) -> list:
     if not text or not isinstance(text, str):
         return []
-    return text.lower().split()
+    return normalize_for_matching(text).split()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -97,23 +100,24 @@ class BM25Index:
         b: float = 0.75,
         max_df_ratio: float = 0.15,
     ):
+        if not 0.0 < max_df_ratio <= 1.0:
+            raise ValueError("max_df_ratio must be in (0, 1]")
+        if k1 <= 0 or not 0.0 <= b <= 1.0:
+            raise ValueError("BM25 requires k1 > 0 and b in [0, 1]")
         self.item_ids = np.asarray(item_ids)
+        if self.item_ids.ndim != 1 or len(self.item_ids) != len(texts):
+            raise ValueError("item_ids and texts must be aligned one-dimensional data")
         self.k1 = k1
         self.b = b
 
-        doc_tokens = [_tokenize(t) for t in texts]
-        self.doc_len = np.array([len(toks) for toks in doc_tokens], dtype=np.float64)
-        self.n_docs = len(doc_tokens)
+        self.n_docs = len(texts)
+        self.doc_len = np.empty(self.n_docs, dtype=np.float32)
+        document_frequency = Counter()
+        for doc_idx, text in enumerate(texts):
+            tokens = _tokenize(text)
+            self.doc_len[doc_idx] = len(tokens)
+            document_frequency.update(set(tokens))
         self.avgdl = self.doc_len.mean() if self.n_docs else 0.0
-
-        # Ters indeks: token -> {doc_idx: term_frequency} (henüz filtresiz)
-        raw_index = defaultdict(dict)
-        for doc_idx, toks in enumerate(doc_tokens):
-            tf = {}
-            for tok in toks:
-                tf[tok] = tf.get(tok, 0) + 1
-            for tok, freq in tf.items():
-                raw_index[tok][doc_idx] = freq
 
         # IDF: rank_bm25.BM25Okapi ile birebir aynı formül (ATIRE varyantı,
         # epsilon tabanlı taban değeriyle) — idf = log(N - n + 0.5) - log(n + 0.5).
@@ -122,8 +126,7 @@ class BM25Index:
         # sonraki adımda taramadan atacağımız yaygın token' lar dahil TÜM
         # token'lar üzerinden yapılır (rank_bm25 ile ayni average_idf için).
         idf, negative_idf_tokens, idf_sum = {}, [], 0.0
-        for tok, postings in raw_index.items():
-            n = len(postings)
+        for tok, n in document_frequency.items():
             val = np.log(self.n_docs - n + 0.5) - np.log(n + 0.5)
             idf[tok] = val
             idf_sum += val
@@ -135,35 +138,56 @@ class BM25Index:
             idf[tok] = eps
         self.idf = idf
 
-        # Taramayı hızlandırmak için indeksten SADECE çok yaygın token'ları
-        # atıyoruz (bkz. modül docstring'i) — idf değerleri yukarıda tüm
-        # token'lar üzerinden zaten hesaplandı, burada sadece posting
-        # listeleri (asıl tarama maliyeti) filtreleniyor.
         max_df = max_df_ratio * self.n_docs if self.n_docs else 0
+        eligible_tokens = {
+            token for token, frequency in document_frequency.items()
+            if frequency <= max_df
+        }
+        postings = defaultdict(lambda: (array("I"), array("I")))
+        for doc_idx, text in enumerate(texts):
+            frequencies = Counter(_tokenize(text))
+            for token, frequency in frequencies.items():
+                if token in eligible_tokens:
+                    postings[token][0].append(doc_idx)
+                    postings[token][1].append(frequency)
         self.inverted_index = {
-            tok: postings for tok, postings in raw_index.items()
-            if len(postings) <= max_df
+            token: (
+                np.frombuffer(documents, dtype=np.uint32),
+                np.frombuffer(frequencies, dtype=np.uint32),
+            )
+            for token, (documents, frequencies) in postings.items()
         }
 
     def top_n(self, query: str, n: int = 50) -> np.ndarray:
         """Sorgu metnine göre en yüksek BM25 skorlu n ürünün item_id'sini döndürür."""
-        candidate_scores = defaultdict(float)
-
+        if n <= 0:
+            raise ValueError("n must be positive")
+        document_parts = []
+        score_parts = []
+        if self.avgdl <= 0:
+            return np.array([], dtype=self.item_ids.dtype)
         for tok in _tokenize(query):
             postings = self.inverted_index.get(tok)
-            if not postings:
+            if postings is None:
                 continue
+            doc_indices, term_frequencies = postings
             idf = self.idf[tok]
-            for doc_idx, tf in postings.items():
-                dl = self.doc_len[doc_idx]
-                denom = tf + self.k1 * (1 - self.b + self.b * dl / self.avgdl)
-                candidate_scores[doc_idx] += idf * (tf * (self.k1 + 1)) / denom
+            tf = term_frequencies.astype(np.float32, copy=False)
+            denominator = tf + self.k1 * (
+                1 - self.b + self.b * self.doc_len[doc_indices] / self.avgdl
+            )
+            document_parts.append(doc_indices)
+            score_parts.append(idf * (tf * (self.k1 + 1)) / denominator)
 
-        if not candidate_scores:
+        if not document_parts:
             return np.array([], dtype=self.item_ids.dtype)
-
-        ranked_doc_idx = sorted(candidate_scores, key=candidate_scores.get, reverse=True)[:n]
-        return self.item_ids[ranked_doc_idx]
+        documents = np.concatenate(document_parts)
+        contributions = np.concatenate(score_parts)
+        unique_documents, inverse = np.unique(documents, return_inverse=True)
+        scores = np.zeros(len(unique_documents), dtype=np.float64)
+        np.add.at(scores, inverse, contributions)
+        order = np.lexsort((unique_documents, -scores))[:n]
+        return self.item_ids[unique_documents[order]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
