@@ -148,7 +148,7 @@ def main():
     print(f"  Kaydedildi: {SUB_OUTPUT}")
 
     # Basit QA kontrolü yap
-    validate_submission(SUB_OUTPUT, os.path.join(DATA_DIR, "submission_pairs.csv"))
+    validate_submission(SUB_OUTPUT, os.path.join(DATA_DIR, "sample_submission.csv"))
 
     # Rapor yazdır
     report_path = os.path.join(PROJECT_ROOT, "docs", "ensemble_karsilastirma.md")

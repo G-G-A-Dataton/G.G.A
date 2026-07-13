@@ -1,161 +1,199 @@
-"""
-scripts/submission/run_pipeline.py
-==================================
-G.G.A Takımı — Uçtan Uca Feature Üretim ve Prediction Pipeline (14 Temmuz Görevi)
+"""End-to-end batch inference for the G.G.A submission pipeline."""
 
-Muhammed Köseoğlu tarafından hazırlanmıştır.
-
-Bu script, ham veriden nihai Kaggle submission dosyasına kadar olan tüm
-akışı tek bir komutla çalıştırır.
-
-Kullanım:
-  python scripts/submission/run_pipeline.py --mode predict
-  python scripts/submission/run_pipeline.py --mode predict --sample 10000
-"""
-
+import argparse
+import logging
 import os
 import sys
 import time
-import logging
-import argparse
-import warnings
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
 
-warnings.filterwarnings("ignore")
 
-# Proje kök dizinini sys.path'e ekle
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.data              import load_terms, load_items
-from src.features          import build_features, FEATURE_COLS
-from src.tfidf_features    import add_tfidf_features, load_vectorizer
+from src.data import load_items, load_terms
+from src.features import FEATURE_COLS, build_features
+from src.tfidf_features import add_tfidf_features, load_vectorizer
 from src.validate_submission import validate_submission
 
-# Loglama Ayarları
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(os.path.join(PROJECT_ROOT, "outputs", "pipeline.log"), encoding="utf-8")
-    ]
-)
-logger = logging.getLogger("G.G.A.Pipeline")
 
-DATA_DIR    = os.path.join(PROJECT_ROOT, "datasets")
-OUTPUT_DIR  = os.path.join(PROJECT_ROOT, "outputs")
+DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 MODEL_PATHS = [os.path.join(OUTPUT_DIR, f"lgbm_v2_fold_{i}.txt") for i in range(1, 6)]
-VEC_PATH    = os.path.join(OUTPUT_DIR, "tfidf_vectorizer_v2.pkl")
-SUB_OUTPUT  = os.path.join(OUTPUT_DIR, "submission_v2.csv")
+VEC_PATH = os.path.join(OUTPUT_DIR, "tfidf_vectorizer_v2.pkl")
+THRESH_PATH = os.path.join(OUTPUT_DIR, "best_threshold_v2.txt")
+DEFAULT_OUTPUT = os.path.join(OUTPUT_DIR, "submission_v2.csv")
 
 
-def parse_args():
-    p = argparse.ArgumentParser(description="G.G.A Uçtan Uca Prediction Pipeline")
-    p.add_argument("--mode", choices=["predict"], default="predict", help="Çalışma modu")
-    p.add_argument("--sample", type=int, default=None, help="Hızlı test için test setinden alınacak örnek satır sayısı")
-    p.add_argument("--batch-size", type=int, default=100000, help="Bellek tasarrufu için batch boyutu")
-    return p.parse_args()
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="G.G.A end-to-end prediction pipeline")
+    parser.add_argument("--mode", choices=["predict"], default="predict")
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help="Process the first N submission rows without overwriting the full submission",
+    )
+    parser.add_argument("--batch-size", type=int, default=100_000)
+    parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument("--output", default=None)
+    return parser.parse_args(argv)
+
+
+def configure_logging():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(
+                os.path.join(OUTPUT_DIR, "pipeline.log"), encoding="utf-8"
+            ),
+        ],
+        force=True,
+    )
+    return logging.getLogger("G.G.A.Pipeline")
 
 
 def check_dependencies():
-    """Gerekli model ve vectorizer dosyalarının varlığını kontrol eder."""
-    logger.info("Dosya bağımlılıkları kontrol ediliyor...")
-    missing = []
-    for m in MODEL_PATHS:
-        if not os.path.exists(m):
-            missing.append(m)
-    if not os.path.exists(VEC_PATH):
-        missing.append(VEC_PATH)
-        
+    required = MODEL_PATHS + [VEC_PATH, THRESH_PATH]
+    missing = [path for path in required if not os.path.exists(path)]
     if missing:
-        logger.error("Aşağıdaki model bağımlılıkları eksik:")
-        for m in missing:
-            logger.error(f"  - {m}")
-        logger.error("Lütfen önce modelleri eğitin: python scripts/training/run_model_shortlist.py")
-        sys.exit(1)
-    logger.info("Tüm model bağımlılıkları doğrulandı.")
+        formatted = "\n".join(f"  - {path}" for path in missing)
+        raise FileNotFoundError(
+            "Missing inference artifacts:\n"
+            f"{formatted}\n"
+            "Run: python scripts/training/run_train_full_v2.py"
+        )
+
+
+def load_threshold(override=None):
+    if override is not None:
+        threshold = override
+    else:
+        with open(THRESH_PATH, encoding="utf-8") as threshold_file:
+            threshold = float(threshold_file.read().strip())
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError(f"Threshold must be between 0 and 1, got {threshold}")
+    return threshold
+
+
+def resolve_output_path(args):
+    if args.output:
+        return os.path.abspath(args.output)
+    if args.sample:
+        return os.path.join(OUTPUT_DIR, f"submission_v2_sample_{args.sample}.csv")
+    return DEFAULT_OUTPUT
 
 
 def run_prediction_pipeline(args):
-    t_start = time.time()
-    logger.info("G.G.A Uçtan Uca Prediction Pipeline Başlatıldı.")
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be positive")
+    if args.sample is not None and args.sample <= 0:
+        raise ValueError("--sample must be positive")
 
-    # 1. Bağımlılık Kontrolü
+    logger = configure_logging()
+    started_at = time.time()
+    logger.info("G.G.A prediction pipeline started.")
     check_dependencies()
 
-    # 2. Veri Yükleme
-    logger.info("Adım 1/5: Ham veri setleri yükleniyor (terms.csv, items.csv)...")
+    logger.info("Step 1/5: Loading terms and items.")
     terms_df = load_terms(os.path.join(DATA_DIR, "terms.csv"))
     items_df = load_items(os.path.join(DATA_DIR, "items.csv"))
 
-    sub_path = os.path.join(DATA_DIR, "submission_pairs.csv")
-    logger.info(f"Adım 2/5: Arama çiftleri yükleniyor: {sub_path}")
-    sub_df = pd.read_csv(sub_path, dtype={"id": "string", "term_id": "string", "item_id": "string"})
+    pairs_path = os.path.join(DATA_DIR, "submission_pairs.csv")
+    logger.info("Step 2/5: Loading submission pairs: %s", pairs_path)
+    sub_df = pd.read_csv(
+        pairs_path,
+        nrows=args.sample,
+        dtype={"id": "string", "term_id": "string", "item_id": "string"},
+    )
+    if sub_df.empty:
+        raise ValueError("Submission pairs are empty")
 
-    if args.sample:
-        logger.warning(f"Hızlı test modu aktif: {args.sample:,} satır örneklenecek.")
-        sub_df = sub_df.sample(args.sample, random_state=42).reset_index(drop=True)
-
-    # 3. Model ve Vectorizer Yükleme
-    logger.info("Adım 3/5: Modeller ve TF-IDF Vectorizer yükleniyor...")
-    models = [lgb.Booster(model_file=p) for p in MODEL_PATHS]
+    logger.info("Step 3/5: Loading models, vectorizer, and threshold.")
+    models = [lgb.Booster(model_file=path) for path in MODEL_PATHS]
     vectorizer = load_vectorizer(VEC_PATH)
-
-    # 4. Batch Tahmin ve Özellik Üretimi
-    logger.info("Adım 4/5: Batch'ler halinde özellik üretimi ve inference başlıyor...")
-    n_rows = len(sub_df)
-    batch_size = args.batch_size
-    all_preds = []
-
+    threshold = load_threshold(args.threshold)
     feature_cols = FEATURE_COLS + ["tfidf_cosine"]
+    for model_path, model in zip(MODEL_PATHS, models):
+        model_features = model.feature_name()
+        if model_features and model_features != feature_cols:
+            raise ValueError(
+                f"Feature contract mismatch in {model_path}: "
+                f"expected {feature_cols}, got {model_features}"
+            )
 
-    for i in range(0, n_rows, batch_size):
-        t_b0 = time.time()
-        batch_df = sub_df.iloc[i : i + batch_size].copy()
-        
-        # Join işlemleri
-        batch_merged = batch_df.merge(terms_df, on="term_id", how="left")
-        batch_merged = batch_merged.merge(items_df, on="item_id", how="left")
-        
-        # Özellik üretimi
-        batch_features = build_features(batch_merged)
-        batch_features = add_tfidf_features(batch_features, vectorizer)
-        
-        X_batch = batch_features[feature_cols]
-        
-        # 5-Fold model tahmini (ortalama alarak)
-        batch_pred = np.zeros(len(X_batch))
-        for model in models:
-            batch_pred += model.predict(X_batch) / len(models)
-            
-        all_preds.append(batch_pred)
-        t_b1 = time.time()
-        
-        processed = min(i + batch_size, n_rows)
-        logger.info(f"  İşlenen: {processed:,} / {n_rows:,} ({processed/n_rows:.1%}) | Hız: {len(X_batch)/(t_b1-t_b0):.0f} satır/sn")
+    logger.info("Step 4/5: Generating features and predictions in batches.")
+    all_predictions = []
+    for start in range(0, len(sub_df), args.batch_size):
+        batch_started_at = time.time()
+        end = min(start + args.batch_size, len(sub_df))
+        batch = sub_df.iloc[start:end].copy()
+        batch = batch.merge(
+            terms_df, on="term_id", how="left", validate="many_to_one"
+        )
+        batch = batch.merge(
+            items_df, on="item_id", how="left", validate="many_to_one"
+        )
+        if batch[["query", "title"]].isna().any().any():
+            raise ValueError(f"Unresolved term_id or item_id in rows {start}:{end}")
 
-    preds_arr = np.concatenate(all_preds)
+        batch = build_features(batch)
+        batch = add_tfidf_features(batch, vectorizer)
+        X_batch = batch[feature_cols]
+        fold_predictions = np.vstack([model.predict(X_batch) for model in models])
+        all_predictions.append(fold_predictions.mean(axis=0))
 
-    # 5. Threshold ve Çıktı Üretimi
-    logger.info("Adım 5/5: Karar eşiği uygulanıyor ve çıktı dosyası oluşturuluyor...")
-    threshold = 0.35  # En iyi threshold değeri
-    sub_df["label"] = (preds_arr >= threshold).astype(int)
+        duration = max(time.time() - batch_started_at, 1e-9)
+        logger.info(
+            "Processed: %s / %s (%.1f%%) | %.0f rows/s",
+            f"{end:,}",
+            f"{len(sub_df):,}",
+            end / len(sub_df) * 100,
+            len(batch) / duration,
+        )
 
-    logger.info(f"Sonuçlar kaydediliyor: {SUB_OUTPUT}")
-    sub_df[["id", "label"]].to_csv(SUB_OUTPUT, index=False)
+    probabilities = np.concatenate(all_predictions)
+    predictions = (probabilities >= threshold).astype(np.int8)
+    output_path = resolve_output_path(args)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    # Submission QA kontrolü
-    logger.info("Submission dosyası format doğrulaması yapılıyor...")
-    validate_submission(sub_df, sub_df)
+    logger.info("Step 5/5: Writing and validating submission (threshold=%s).", threshold)
+    submission = pd.DataFrame(
+        {"id": sub_df["id"].to_numpy(), "prediction": predictions}
+    )
+    submission.to_csv(output_path, index=False)
 
-    t_end = time.time()
-    logger.info(f"Pipeline başarıyla tamamlandı! Toplam süre: {t_end - t_start:.1f} saniye.")
+    sample_path = None
+    if args.sample is None:
+        sample_path = os.path.join(DATA_DIR, "sample_submission.csv")
+    is_valid = validate_submission(
+        output_path,
+        sample_submission_path=sample_path,
+        expected_rows=len(sub_df),
+        verbose=True,
+    )
+    if not is_valid:
+        raise RuntimeError(f"Submission validation failed: {output_path}")
+
+    logger.info(
+        "Pipeline completed in %.1f seconds. Output: %s",
+        time.time() - started_at,
+        output_path,
+    )
+    return output_path
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.mode == "predict":
+        run_prediction_pipeline(args)
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    if args.mode == "predict":
-        run_prediction_pipeline(args)
+    main()

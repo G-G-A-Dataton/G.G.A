@@ -14,11 +14,17 @@ Submission yüklenmeden önce zorunlu kontroller:
 
 import os
 import pandas as pd
+from pandas.api.types import is_integer_dtype
 
 EXPECTED_ROWS = 3_359_679  # sample_submission.csv satır sayısı (header hariç)
 
 
-def validate_submission(submission_path, sample_submission_path=None, verbose=True):
+def validate_submission(
+    submission_path,
+    sample_submission_path=None,
+    expected_rows=None,
+    verbose=True,
+):
     """
     Kaggle submission dosyasını resmi formata göre doğrular.
 
@@ -43,7 +49,7 @@ def validate_submission(submission_path, sample_submission_path=None, verbose=Tr
     """
 
     errors = []
-    warnings = []
+    sample_df = None
 
     if verbose:
         print("=" * 55)
@@ -53,26 +59,39 @@ def validate_submission(submission_path, sample_submission_path=None, verbose=Tr
 
     # ─── Dosyayı oku ────────────────────────────────────────
     try:
-        sub_df = pd.read_csv(submission_path)
+        sub_df = pd.read_csv(submission_path, dtype={"id": "string"})
     except Exception as e:
         errors.append(f"Dosya okunamadı: {e}")
-        _report(errors, warnings, verbose)
+        _report(errors, verbose)
         return False
 
+    if sample_submission_path:
+        try:
+            sample_df = pd.read_csv(
+                sample_submission_path,
+                usecols=["id"],
+                dtype={"id": "string"},
+            )
+        except Exception as e:
+            errors.append(f"Sample submission okunamadı: {e}")
+
+    if expected_rows is None:
+        expected_rows = len(sample_df) if sample_df is not None else EXPECTED_ROWS
+
     # ─── Kontrol 1: Kolon isimleri ──────────────────────────
-    expected_cols = {"id", "prediction"}
-    actual_cols   = set(sub_df.columns.tolist())
+    expected_cols = ["id", "prediction"]
+    actual_cols = sub_df.columns.tolist()
 
     if actual_cols != expected_cols:
-        errors.append(f"Yanlış kolonlar: {actual_cols} — Beklenen: {expected_cols}")
+        errors.append(f"Yanlış kolonlar/sıra: {actual_cols} — Beklenen: {expected_cols}")
     else:
         _ok("[1] Kolon isimleri doğru: 'id', 'prediction'", verbose)
 
     # ─── Kontrol 2: Satır sayısı ────────────────────────────
     actual_rows = len(sub_df)
-    if actual_rows != EXPECTED_ROWS:
+    if actual_rows != expected_rows:
         errors.append(
-            f"Yanlış satır sayısı: {actual_rows:,} — Beklenen: {EXPECTED_ROWS:,}"
+            f"Yanlış satır sayısı: {actual_rows:,} — Beklenen: {expected_rows:,}"
         )
     else:
         _ok(f"[2] Satır sayısı doğru: {actual_rows:,}", verbose)
@@ -83,10 +102,17 @@ def validate_submission(submission_path, sample_submission_path=None, verbose=Tr
         if null_count > 0:
             errors.append(f"'prediction' kolonunda {null_count} NaN değeri var!")
 
-        unique_vals = set(sub_df["prediction"].dropna().unique())
-        if not unique_vals.issubset({0, 1}):
+        if not is_integer_dtype(sub_df["prediction"].dtype):
             errors.append(
-                f"'prediction' sadece 0 veya 1 içermeli. Bulunan: {unique_vals}"
+                "'prediction' kolonu integer olmalı; "
+                f"bulunan dtype: {sub_df['prediction'].dtype}"
+            )
+
+        unique_vals = set(sub_df["prediction"].dropna().unique())
+        if not unique_vals or not unique_vals.issubset({0, 1}):
+            errors.append(
+                "'prediction' yalnızca 0 veya 1 değerlerini içermeli. "
+                f"Bulunan: {unique_vals}"
             )
         else:
             pred_counts = sub_df["prediction"].value_counts().to_dict()
@@ -96,15 +122,19 @@ def validate_submission(submission_path, sample_submission_path=None, verbose=Tr
             )
 
     # ─── Kontrol 4: ID sırası (sample_submission ile karşılaştır) ───
-    if sample_submission_path and "id" in sub_df.columns:
-        try:
-            sample_df = pd.read_csv(sample_submission_path, usecols=["id"])
-            if list(sub_df["id"]) != list(sample_df["id"]):
-                errors.append("ID sırası sample_submission.csv ile uyuşmuyor!")
-            else:
-                _ok("[4] ID sırası sample_submission.csv ile birebir eşleşiyor.", verbose)
-        except Exception as e:
-            warnings.append(f"ID sırası kontrolü yapılamadı: {e}")
+    if sample_df is not None and "id" in sub_df.columns:
+        if not sub_df["id"].reset_index(drop=True).equals(
+            sample_df["id"].reset_index(drop=True)
+        ):
+            errors.append("ID sırası sample_submission.csv ile uyuşmuyor!")
+        else:
+            _ok("[4] ID sırası sample_submission.csv ile birebir eşleşiyor.", verbose)
+
+    if "id" in sub_df.columns:
+        if sub_df["id"].isna().any():
+            errors.append("'id' kolonunda eksik değer var!")
+        if sub_df["id"].duplicated().any():
+            errors.append("'id' kolonunda tekrar eden değer var!")
 
     # ─── Kontrol 5: Index kolonu olmadığından emin ol ───────
     unnamed_cols = [c for c in sub_df.columns if "Unnamed" in str(c)]
@@ -116,7 +146,7 @@ def validate_submission(submission_path, sample_submission_path=None, verbose=Tr
     else:
         _ok("[5] Index kolonu yok. Temiz.", verbose)
 
-    _report(errors, warnings, verbose)
+    _report(errors, verbose)
     return len(errors) == 0
 
 
@@ -125,12 +155,9 @@ def _ok(msg, verbose):
         print(f"  [OK] {msg}")
 
 
-def _report(errors, warnings, verbose):
+def _report(errors, verbose):
     if verbose:
         print("")
-        if warnings:
-            for w in warnings:
-                print(f"  [UYARI]  {w}")
         if errors:
             print(f"  [HATA] {len(errors)} HATA BULUNDU:")
             for e in errors:

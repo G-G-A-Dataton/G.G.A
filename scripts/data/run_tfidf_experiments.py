@@ -25,7 +25,7 @@ import time
 import numpy as np
 import pandas as pd
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.data              import load_terms, load_items

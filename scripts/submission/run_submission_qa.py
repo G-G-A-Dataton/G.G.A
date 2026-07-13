@@ -19,7 +19,7 @@ import os
 import sys
 import pandas as pd
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.validate_submission import validate_submission
@@ -63,6 +63,7 @@ def run_full_qa(submission_path: str) -> bool:
     format_ok = validate_submission(
         submission_path,
         sample_submission_path=SAMPLE_SUB_PATH,
+        expected_rows=None,
         verbose=True
     )
 

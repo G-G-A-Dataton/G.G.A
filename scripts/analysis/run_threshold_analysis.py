@@ -33,7 +33,7 @@ from sklearn.metrics import f1_score, precision_score, recall_score, confusion_m
 
 warnings.filterwarnings("ignore")
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.data              import load_terms, load_items
