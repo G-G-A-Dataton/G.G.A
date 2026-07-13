@@ -110,7 +110,9 @@ def macro_f1_from_proba(y_true, y_proba, threshold=0.5):
     return macro_f1(y_true, y_pred)
 
 
-def find_best_threshold(y_true, y_proba, thresholds=None):
+def find_best_threshold(
+    y_true, y_proba, thresholds=None, *, return_results=True
+):
     """
     Validation seti üzerinde Macro-F1'i maksimize eden eşik değerini arar.
 
@@ -123,6 +125,10 @@ def find_best_threshold(y_true, y_proba, thresholds=None):
     thresholds : list of float, optional
         Denenecek eşik değerleri. None ise tahminlerin değiştiği tüm benzersiz
         olasılık sınırları kayıpsız ve O(n log n) zamanda değerlendirilir.
+    return_results : bool, default=True
+        False olduğunda tüm eşik/skor çiftlerini Python nesnelerine dönüştürmez.
+        Büyük OOF seçimlerinde yalnızca optimum gerektiğinde bellek kullanımını
+        sınırlar.
 
     Döndürür
     -------
@@ -168,7 +174,6 @@ def find_best_threshold(y_true, y_proba, thresholds=None):
         )
         thresholds_array = sorted_proba[boundary_indices]
         scores_array = (positive_f1 + negative_f1) / 2.0
-        results = list(zip(thresholds_array.tolist(), scores_array.tolist()))
     else:
         thresholds_array = np.asarray(list(thresholds), dtype=np.float64)
         if thresholds_array.ndim != 1 or len(thresholds_array) == 0:
@@ -178,20 +183,26 @@ def find_best_threshold(y_true, y_proba, thresholds=None):
         ).any():
             raise ValueError("thresholds must contain finite values in [0, 1]")
         thresholds_array = np.unique(thresholds_array)
-        results = [
-            (float(threshold), macro_f1_from_proba(y_true, y_proba, threshold))
-            for threshold in thresholds_array
-        ]
-    best_score = max(score for _, score in results)
-    tied = [
-        threshold
-        for threshold, score in results
-        if np.isclose(score, best_score, rtol=0.0, atol=1e-12)
+        scores_array = np.asarray(
+            [
+                macro_f1_from_proba(y_true, y_proba, threshold)
+                for threshold in thresholds_array
+            ],
+            dtype=np.float64,
+        )
+    best_score = float(scores_array.max())
+    tied = thresholds_array[
+        np.isclose(scores_array, best_score, rtol=0.0, atol=1e-12)
     ]
     # A deterministic central tie-break is less brittle than selecting the
     # first edge of a flat optimum.
     best_threshold = min(tied, key=lambda value: (abs(value - 0.5), value))
-    return float(best_threshold), float(best_score), results
+    results = (
+        list(zip(thresholds_array.tolist(), scores_array.tolist()))
+        if return_results
+        else None
+    )
+    return float(best_threshold), best_score, results
 
 
 # ─────────────────────────────────────────────

@@ -18,6 +18,17 @@ class MetricContractTests(unittest.TestCase):
         self.assertEqual(score, 1.0)
         self.assertIn((0.5009, 1.0), results)
 
+    def test_threshold_search_can_skip_materializing_diagnostics(self):
+        labels = np.array([1, 1, 0, 0], dtype=np.int8)
+        probabilities = np.array([0.501, 0.5009, 0.5008, 0.1])
+
+        threshold, score, results = find_best_threshold(
+            labels, probabilities, return_results=False
+        )
+
+        self.assertEqual((threshold, score), (0.5009, 1.0))
+        self.assertIsNone(results)
+
     def test_rejects_invalid_metric_inputs(self):
         with self.assertRaisesRegex(ValueError, "equal length"):
             macro_f1([0, 1], [1])
