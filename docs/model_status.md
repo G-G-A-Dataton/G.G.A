@@ -18,7 +18,7 @@ All scores recorded before the current contracts remain historical only. They us
 
 ## Verified Runs
 
-- Unit/integration suite: 66 passing tests.
+- Unit/integration suite: 77 passing tests.
 - Canonical training smoke: 20 complete terms, 2,396 candidates, five folds, artifact manifest generated.
 - Shortlist smoke: 10 complete terms, five LightGBM + five XGBoost folds, 200 test rows, valid OOF manifest and submission.
 - BM25 smoke: 20,000 catalog items in 2.71 seconds, approximately 140 MB peak RSS.

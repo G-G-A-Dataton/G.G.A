@@ -1,352 +1,305 @@
-"""
-run_hata_taksonomisi.py
-========================
-G.G.A Takimi -- Hatali Tahmin Taksonomisi (12 Temmuz Gorevi)
+"""Build an evidence-based error taxonomy from verified grouped OOF artifacts."""
 
-Ahmet Emin Isın tarafından hazırlanmıştır.
-
-Bu script modelin yanilttigi ornekleri sistematik olarak siniflandirir:
-
-  Hata Turleri:
-  1. MARKA HATASI     -- Sorgu bir marka icerir ama tahmin edilen urun farkli markaya ait
-  2. KATEGORI HATASI  -- Sorgu ve urun farkli L1 kategorisinde
-  3. RENK HATASI      -- Sorguda renk var, urunde farkli renk var
-  4. SEMANTIK HATASI  -- Hicbir acik kural ihlali yok ama model yanildi (zor ornekler)
-
-Bu siniflandirma sayesinde:
-  - Hangi tur hatalarin ne kadar sik oldugu gorulur
-  - Her hata turune ozel feature/strateji onerileri yapilir
-  - Rapor icin somut ornekler sunulur
-
-Calistirmak icin:
-  python run_hata_taksonomisi.py
-"""
-
+import argparse
 import os
 import sys
-import warnings
+
 import numpy as np
 import pandas as pd
 
-warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.data              import load_terms, load_items
-from src.features          import build_features, FEATURE_COLS
-from src.negative_sampling import build_training_set
-from src.metrics           import get_stratified_group_kfold
-import lightgbm as lgb
-
-DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-DOCS_DIR   = os.path.join(PROJECT_ROOT, "docs")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-SAMPLE_POS  = 3_000
-NEG_RATIO   = 2
-RANDOM_SEED = 42
-THRESHOLD   = 0.35  # 11 Temmuz threshold analizinden optimal deger
-
-LGBM_PARAMS = {
-    "objective"        : "binary",
-    "metric"           : "binary_logloss",
-    "num_leaves"       : 31,
-    "learning_rate"    : 0.05,
-    "min_child_samples": 20,
-    "subsample"        : 0.8,
-    "colsample_bytree" : 0.8,
-    "verbose"          : -1,
-    "random_state"     : RANDOM_SEED,
-}
+from src.candidate_sampling import (
+    build_test_shaped_training_set,
+    candidate_distribution,
+    sample_complete_terms,
+)
+from src.data import load_items, load_terms
+from src.features import build_features
+from src.metrics import macro_f1
+from src.modeling import (
+    predictions_from_cross_fitted_selection,
+    probabilities_from_cross_fitted_selection,
+    select_cross_fitted_candidate,
+)
+from src.oof_artifacts import load_oof_artifacts
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. OOF Tahmin Uretimi
-# ─────────────────────────────────────────────────────────────────────────────
+DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
+DEFAULT_ARTIFACT_DIR = os.path.join(PROJECT_ROOT, "outputs", "ensemble_artifacts")
+DEFAULT_OUTPUT = os.path.join(PROJECT_ROOT, "outputs", "error_taxonomy.csv")
+DEFAULT_REPORT = os.path.join(PROJECT_ROOT, "docs", "error_taxonomy.md")
 
-def get_oof_predictions(X, y, groups):
-    """5-Fold OOF tahminleri uretir."""
-    skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
-    oof_preds = np.zeros(len(X))
 
-    for fold, (tr_idx, val_idx) in enumerate(
-        skf.split(X, y, groups=groups), start=1
-    ):
-        print(f"  Fold {fold}/5 ...", end="\r")
-        dtrain = lgb.Dataset(X.iloc[tr_idx], label=y.iloc[tr_idx])
-        dval   = lgb.Dataset(X.iloc[val_idx], label=y.iloc[val_idx])
-        model  = lgb.train(
-            LGBM_PARAMS, dtrain,
-            num_boost_round=500,
-            valid_sets=[dval],
-            callbacks=[
-                lgb.early_stopping(30, verbose=False),
-                lgb.log_evaluation(period=-1),
-            ]
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Classify held-out errors using observable feature conflicts"
+    )
+    parser.add_argument("--artifact-dir", default=DEFAULT_ARTIFACT_DIR)
+    parser.add_argument("--output", default=None)
+    parser.add_argument("--report", default=None)
+    parser.add_argument("--allow-sample", action="store_true")
+    return parser.parse_args(argv)
+
+
+def classify_error_signals(frame):
+    """Assign one primary observable signal without claiming error causality."""
+    required = {
+        "label",
+        "query_model_token_conflict",
+        "demographic_conflict",
+        "query_color_match",
+        "query_size_match",
+        "query_material_match",
+        "query_title_overlap",
+        "query_category_overlap",
+        "query_title_coverage",
+    }
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"error taxonomy input is missing columns: {missing}")
+    conditions = [
+        frame["query_model_token_conflict"] == 1,
+        frame["demographic_conflict"] == 1,
+        frame["query_color_match"] == -1,
+        frame["query_size_match"] == -1,
+        frame["query_material_match"] == -1,
+        (frame["query_title_overlap"] == 0)
+        & (frame["query_category_overlap"] == 0),
+        (frame["label"] == 0) & (frame["query_title_coverage"] >= 0.5),
+    ]
+    labels = [
+        "MODEL_CODE_CONFLICT",
+        "DEMOGRAPHIC_CONFLICT",
+        "COLOR_CONFLICT",
+        "SIZE_CONFLICT",
+        "MATERIAL_CONFLICT",
+        "NO_LEXICAL_EVIDENCE",
+        "LEXICAL_DECOY",
+    ]
+    return pd.Series(
+        np.select(conditions, labels, default="OTHER"),
+        index=frame.index,
+        dtype="string",
+    )
+
+
+def _rebuild_candidates(manifest, items):
+    positives = pd.read_csv(
+        os.path.join(DATA_DIR, "training_pairs.csv"),
+        dtype={
+            "id": "string",
+            "term_id": "string",
+            "item_id": "string",
+            "label": "int8",
+        },
+    )
+    if manifest["training_mode"] == "sample":
+        selected = sample_complete_terms(
+            positives,
+            manifest["training"]["terms"],
+            random_state=42,
         )
-        oof_preds[val_idx] = model.predict(X.iloc[val_idx])
-
-    print("  5 fold tamamlandi.          ")
-    return oof_preds
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. Hata Taksonomisi
-# ─────────────────────────────────────────────────────────────────────────────
-
-def classify_error(row):
-    """
-    Tek bir hatali tahmini siniflandirir.
-
-    Oncelik sirasi: marka > kategori > renk > semantik
-    Bir ornek birden fazla hata turune girebilir ama en spesifik sinif atanir.
-
-    Parametreler
-    ----------
-    row : pd.Series
-        Sorgu ve urun bilgilerini iceren satir.
-
-    Dondurur
-    -------
-    str
-        Hata sinifi etiketi.
-    """
-    query = str(row.get("query", "") or "").lower()
-    title = str(row.get("title", "") or "").lower()
-
-    # Marka kontrolu: sorgu markasini iceriyor mu, urun farkli markali mi?
-    brand = str(row.get("brand", "") or "").lower().strip()
-    if brand and brand in query:
-        if brand not in title:
-            return "MARKA_HATASI"
-
-    # Kategori kontrolu: L1 kategorisi cakisiyor mu?
-    category = str(row.get("category", "") or "")
-    cat_l1 = category.split("/")[0].strip().lower() if "/" in category else category.lower()
-    query_words = set(query.split())
-    # Basit L1 kategori kelimesi sorguda var mi?
-    cat_words = set(cat_l1.split())
-    # Sorgu kelimelerinde hic kategori ipucu yok ve query_cat_l1_overlap sifirsa
-    if row.get("query_cat_l1_overlap", 1) == 0 and len(query_words) > 0:
-        # Baska bir kategorinin kelimelerini icerip icermedigi cok karmasik
-        # Basit heuristik: L1 overlap tamamen sifir ve query uzunsa muhtemelen kategori hatasi
-        if len(query_words) >= 2:
-            return "KATEGORI_HATASI"
-
-    # Renk kontrolu: sorguda renk var ama urun farkli renk mi?
-    RENKLER = [
-        "siyah", "beyaz", "kirmizi", "mavi", "yesil", "sari", "turuncu",
-        "mor", "pembe", "gri", "kahverengi", "bej", "lacivert", "haki",
-        "black", "white", "red", "blue", "green", "yellow", "pink", "grey",
-    ]
-    query_color = next((r for r in RENKLER if r in query), None)
-    if query_color:
-        attrs = str(row.get("attributes", "") or "").lower()
-        if attrs and query_color not in attrs and query_color not in title:
-            return "RENK_HATASI"
-
-    # Hic kural ihlali yok -> semantik hata (zor ornek)
-    return "SEMANTIK_HATASI"
+    elif manifest["training_mode"] == "full":
+        selected = positives
+    else:
+        raise ValueError(f"unsupported training mode: {manifest['training_mode']}")
+    config = manifest["candidate_sampling"]
+    candidates = build_test_shaped_training_set(
+        selected,
+        items,
+        positive_reference_df=positives,
+        min_candidates=config["min_candidates"],
+        dense_multiplier=config["dense_multiplier"],
+        category_hard_fraction=config["category_hard_fraction"],
+        random_state=config["random_state"],
+    )
+    actual = candidate_distribution(candidates)
+    for field in ("terms", "rows", "positive_rows", "negative_rows"):
+        if actual[field] != manifest["training"][field]:
+            raise ValueError(
+                f"reconstructed candidate {field} mismatch: "
+                f"{actual[field]} != {manifest['training'][field]}"
+            )
+    return candidates
 
 
-def analyze_errors(merged, oof_preds, threshold):
-    """
-    FP ve FN orneklerini tespit eder ve siniflandirir.
-
-    Parametreler
-    ----------
-    merged : pd.DataFrame
-        Feature'lar ve ham veri bir arada.
-    oof_preds : np.ndarray
-        OOF tahmin olasılıkları.
-    threshold : float
-        Karar esigi.
-
-    Dondurur
-    -------
-    pd.DataFrame, pd.DataFrame
-        (fp_df, fn_df)
-    """
-    y_true = merged["label"].values
-    y_pred = (oof_preds >= threshold).astype(int)
-
-    # FP: model 1 dedi, gercek 0
-    fp_mask = (y_pred == 1) & (y_true == 0)
-    # FN: model 0 dedi, gercek 1
-    fn_mask = (y_pred == 0) & (y_true == 1)
-
-    def enrich(mask, error_type_prefix):
-        subset = merged[mask].copy()
-        subset["pred_prob"]    = oof_preds[mask]
-        subset["error_prefix"] = error_type_prefix
-        subset["hata_turu"]    = subset.apply(classify_error, axis=1)
-        return subset
-
-    fp_df = enrich(fp_mask, "FP")
-    fn_df = enrich(fn_mask, "FN")
-    return fp_df, fn_df
+def _atomic_write_frame(frame, path):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    frame.to_csv(temporary_path, index=False)
+    os.replace(temporary_path, path)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Rapor Uretimi
-# ─────────────────────────────────────────────────────────────────────────────
+def _markdown_cell(value, limit=80):
+    return str(value).replace("|", "\\|").replace("\n", " ")[:limit]
 
-def write_report(fp_df, fn_df, path, threshold):
-    """Hata taksonomisi Markdown raporunu kaydeder."""
-    fp_counts = fp_df["hata_turu"].value_counts()
-    fn_counts = fn_df["hata_turu"].value_counts()
-    all_types = ["MARKA_HATASI", "KATEGORI_HATASI", "RENK_HATASI", "SEMANTIK_HATASI"]
 
+def _write_report(path, errors, selection, score, manifest):
+    counts = (
+        errors.groupby(["error_type", "observed_signal"], observed=True)
+        .size()
+        .rename("rows")
+        .reset_index()
+    )
     lines = [
-        "# Hata Taksonomisi Raporu (12 Temmuz)",
+        "# Error Taxonomy",
         "",
-        "**Hazırlayan:** Ahmet Emin Işın  ",
-        "**Tarih:** 12 Temmuz 2026  ",
-        f"**Threshold:** {threshold}  ",
-        f"**Toplam FP:** {len(fp_df)}  ",
-        f"**Toplam FN:** {len(fn_df)}  ",
+        "Errors are generated with fold-specific model weights and thresholds selected without the evaluated fold. Taxonomy labels describe observable feature evidence; they do not assert root cause.",
         "",
-        "---",
+        f"- Artifact mode: `{manifest['training_mode']}`",
+        f"- Selected candidate: `{selection['deploy']['selected_model']}`",
+        f"- Cross-fitted Macro-F1: `{score:.6f}`",
+        f"- False positives: `{int((errors['error_type'] == 'FP').sum()):,}`",
+        f"- False negatives: `{int((errors['error_type'] == 'FN').sum()):,}`",
         "",
-        "## 1. Hata Dagilimi",
+        "## Distribution",
         "",
-        "| Hata Turu | FP Sayisi | FP % | FN Sayisi | FN % |",
-        "|---|---|---|---|---|",
+        "| Error type | Observed signal | Rows |",
+        "|---|---|---:|",
     ]
+    for row in counts.itertuples(index=False):
+        lines.append(f"| {row.error_type} | {row.observed_signal} | {row.rows:,} |")
 
-    for ht in all_types:
-        fp_n = fp_counts.get(ht, 0)
-        fn_n = fn_counts.get(ht, 0)
-        fp_p = 100 * fp_n / max(len(fp_df), 1)
-        fn_p = 100 * fn_n / max(len(fn_df), 1)
-        lines.append(f"| {ht} | {fp_n} | {fp_p:.1f}% | {fn_n} | {fn_p:.1f}% |")
+    lines.extend(
+        [
+            "",
+            "## Highest-confidence False Positives",
+            "",
+            "| Query | Product title | Probability | Signal |",
+            "|---|---|---:|---|",
+        ]
+    )
+    false_positives = errors[errors["error_type"] == "FP"].nlargest(
+        10, "oof_probability"
+    )
+    for row in false_positives.itertuples(index=False):
+        lines.append(
+            f"| {_markdown_cell(row.query)} | {_markdown_cell(row.title)} | "
+            f"{row.oof_probability:.6f} | {row.observed_signal} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Lowest-confidence False Negatives",
+            "",
+            "| Query | Product title | Probability | Signal |",
+            "|---|---|---:|---|",
+        ]
+    )
+    false_negatives = errors[errors["error_type"] == "FN"].nsmallest(
+        10, "oof_probability"
+    )
+    for row in false_negatives.itertuples(index=False):
+        lines.append(
+            f"| {_markdown_cell(row.query)} | {_markdown_cell(row.title)} | "
+            f"{row.oof_probability:.6f} | {row.observed_signal} |"
+        )
+    lines.extend(
+        [
+            "",
+            "The row-level evidence is stored in `outputs/error_taxonomy.csv`.",
+            "",
+        ]
+    )
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as report_file:
+        report_file.write("\n".join(lines))
+    os.replace(temporary_path, path)
 
-    lines += [
-        "",
-        "---",
-        "",
-        "## 2. Hata Tur Aciklamalari",
-        "",
-        "### MARKA_HATASI",
-        "Sorguda marka gecmesine ragmen model farkli markalı urunu secti.",
-        "- **Cozum:** `query_brand_match` feature'i zaten var. Marka odakli hard negative ornekleri artirmak yardimci olabilir.",
-        "",
-        "### KATEGORI_HATASI",
-        "Sorgu ile urun farkli L1 kategorisinde bulunuyor.",
-        "- **Cozum:** Kategori L2/L3 feature'lari eklendi (6 Temmuz). Bu hatalarin azalmasi bekleniyor.",
-        "",
-        "### RENK_HATASI",
-        "Sorguda renk bilgisi var ama urun farkli renkte.",
-        "- **Cozum:** `query_color_match` feature'i eklendi (8 Temmuz) ancak importance sifir cikti. BM25 hard negative ile renk catismali ornekler uretilirse bu feature aktive olabilir.",
-        "",
-        "### SEMANTIK_HATASI",
-        "Acik kural ihlali yok. Model anlam olarak benzer ama alakasiz urunleri secti.",
-        "- **Cozum:** Embedding cosine feature eklenmesi (12 Temmuz, Omer Faruk) bu hatalari azaltabilir.",
-        "",
-        "---",
-        "",
-        "## 3. Ornek FP Hatalar (Ilk 5)",
-        "",
-        "| Sorgu | Urun Basligi | Pred Prob | Hata Turu |",
-        "|---|---|---|---|",
+
+def main(argv=None):
+    args = parse_args(argv)
+    output = args.output or (
+        os.path.join(PROJECT_ROOT, "outputs", "error_taxonomy_sample.csv")
+        if args.allow_sample
+        else DEFAULT_OUTPUT
+    )
+    report = args.report or (
+        os.path.join(PROJECT_ROOT, "docs", "error_taxonomy_sample.md")
+        if args.allow_sample
+        else DEFAULT_REPORT
+    )
+    manifest, arrays = load_oof_artifacts(
+        args.artifact_dir,
+        require_full=not args.allow_sample,
+        source_data_dir=DATA_DIR,
+    )
+    selection = select_cross_fitted_candidate(
+        arrays["y_true.npy"],
+        arrays["oof_lgbm.npy"],
+        arrays["oof_xgb.npy"],
+        arrays["fold_ids.npy"],
+    )
+    probabilities = probabilities_from_cross_fitted_selection(
+        arrays["oof_lgbm.npy"],
+        arrays["oof_xgb.npy"],
+        arrays["fold_ids.npy"],
+        selection,
+    )
+    predictions = predictions_from_cross_fitted_selection(
+        arrays["oof_lgbm.npy"],
+        arrays["oof_xgb.npy"],
+        arrays["fold_ids.npy"],
+        selection,
+    )
+    y_true = np.asarray(arrays["y_true.npy"], dtype=np.int8)
+    score = macro_f1(y_true, predictions)
+    error_mask = predictions != y_true
+
+    items = load_items(os.path.join(DATA_DIR, "items.csv"))
+    candidates = _rebuild_candidates(manifest, items)
+    if not np.array_equal(candidates["label"].to_numpy(dtype=np.int8), y_true):
+        raise ValueError("reconstructed candidate labels do not align with OOF rows")
+    errors = candidates.loc[
+        error_mask, ["term_id", "item_id", "label"]
+    ].copy()
+    errors["prediction"] = predictions[error_mask]
+    errors["oof_probability"] = probabilities[error_mask]
+    errors["error_type"] = np.where(errors["label"] == 0, "FP", "FN")
+
+    terms = load_terms(os.path.join(DATA_DIR, "terms.csv"))
+    errors = errors.merge(
+        terms, on="term_id", how="left", validate="many_to_one"
+    ).merge(items, on="item_id", how="left", validate="many_to_one")
+    errors = build_features(errors, copy=False)
+    errors["observed_signal"] = classify_error_signals(errors)
+    export_columns = [
+        "term_id",
+        "item_id",
+        "label",
+        "prediction",
+        "oof_probability",
+        "error_type",
+        "observed_signal",
+        "query",
+        "title",
+        "category",
+        "brand",
+        "query_title_overlap",
+        "query_title_coverage",
+        "query_category_overlap",
+        "query_model_token_conflict",
+        "demographic_conflict",
+        "query_color_match",
+        "query_size_match",
+        "query_material_match",
     ]
-
-    for _, row in fp_df.nlargest(5, "pred_prob").iterrows():
-        q = str(row.get("query", ""))[:40]
-        t = str(row.get("title", ""))[:40]
-        lines.append(f"| {q} | {t} | {row['pred_prob']:.3f} | {row['hata_turu']} |")
-
-    lines += [
-        "",
-        "## 4. Ornek FN Hatalar (Ilk 5 — En Dusuk Olasilik)",
-        "",
-        "| Sorgu | Urun Basligi | Pred Prob | Hata Turu |",
-        "|---|---|---|---|",
-    ]
-
-    for _, row in fn_df.nsmallest(5, "pred_prob").iterrows():
-        q = str(row.get("query", ""))[:40]
-        t = str(row.get("title", ""))[:40]
-        lines.append(f"| {q} | {t} | {row['pred_prob']:.3f} | {row['hata_turu']} |")
-
-    lines += [
-        "",
-        "---",
-        "",
-        "## 5. Oneriler",
-        "",
-        "1. **Semantik hatalar** en yaygin tur → Embedding cosine feature sprint 3'te kritik",
-        "2. **Renk hatalari** icin BM25 hard negative renk catismasi olusturan ornekler uretilmeli",
-        "3. **Marka hatalari** azsa model marka sinyalini iyi ogrenmiş demek",
-        "",
-        f"*Ham CSV: `outputs/hata_taksonomisi_fp.csv`, `outputs/hata_taksonomisi_fn.csv`*",
-    ]
-
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    errors = errors[export_columns].sort_values(
+        ["error_type", "oof_probability"], ascending=[True, False]
+    )
+    _atomic_write_frame(errors, output)
+    _write_report(report, errors, selection, score, manifest)
+    print(
+        f"selected={selection['deploy']['selected_model']} "
+        f"cross_fitted_macro_f1={score:.6f} errors={len(errors):,}"
+    )
+    print(f"taxonomy={output}\nreport={report}")
+    return output
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("  G.G.A - Hata Taksonomisi (12 Temmuz)")
-    print(f"  Threshold: {THRESHOLD}")
-    print("=" * 60)
-
-    # 1. Veri
-    print("\n[1/3] Veri yukleniyor...")
-    terms_df = load_terms(os.path.join(DATA_DIR, "terms.csv"))
-    items_df  = load_items(os.path.join(DATA_DIR, "items.csv"))
-    train_raw = pd.read_csv(
-        os.path.join(DATA_DIR, "training_pairs.csv"),
-        dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
-    )
-    pos_sample = train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED)
-    full_train = build_training_set(
-        pos_sample, items_df, ratio=NEG_RATIO,
-        random_state=RANDOM_SEED, verbose=False,
-        positive_reference_df=train_raw,
-    )
-    merged = full_train.merge(terms_df, on="term_id", how="left")
-    merged = merged.merge(items_df,  on="item_id",  how="left")
-    merged = build_features(merged)
-    print(f"  {len(merged):,} satir hazir")
-
-    X = merged[FEATURE_COLS]
-    y = merged["label"]
-
-    # 2. OOF tahminleri
-    print("\n[2/3] OOF tahminleri (5-Fold CV)...")
-    oof_preds = get_oof_predictions(X, y, merged["term_id"])
-
-    # 3. Hata analizi
-    print(f"\n[3/3] Hata taksonomisi yapiliyor (threshold={THRESHOLD})...")
-    fp_df, fn_df = analyze_errors(merged, oof_preds, THRESHOLD)
-
-    fp_counts = fp_df["hata_turu"].value_counts()
-    fn_counts = fn_df["hata_turu"].value_counts()
-
-    print("\n" + "=" * 60)
-    print("  HATA TAKSONOMISI")
-    print("=" * 60)
-    print(f"\n  Toplam FP: {len(fp_df)}, Toplam FN: {len(fn_df)}")
-    print("\n  Hata Turu              FP     FN")
-    print("  " + "-" * 40)
-    for ht in ["MARKA_HATASI", "KATEGORI_HATASI", "RENK_HATASI", "SEMANTIK_HATASI"]:
-        fp_n = fp_counts.get(ht, 0)
-        fn_n = fn_counts.get(ht, 0)
-        print(f"  {ht:<22} {fp_n:5}  {fn_n:5}")
-
-    # Kaydet
-    fp_df[["query", "title", "brand", "category", "pred_prob", "hata_turu"]].to_csv(
-        os.path.join(OUTPUT_DIR, "hata_taksonomisi_fp.csv"), index=False
-    )
-    fn_df[["query", "title", "brand", "category", "pred_prob", "hata_turu"]].to_csv(
-        os.path.join(OUTPUT_DIR, "hata_taksonomisi_fn.csv"), index=False
-    )
-    out_md = os.path.join(DOCS_DIR, "hata_taksonomisi.md")
-    write_report(fp_df, fn_df, out_md, THRESHOLD)
-
-    print(f"\n  Rapor: {out_md}")
-    print("=" * 60)
+    main()

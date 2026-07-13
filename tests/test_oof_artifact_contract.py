@@ -5,6 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+import numpy as np
+
 from scripts.training import run_model_shortlist
 from src.modeling import MODEL_FEATURE_COLS
 from src.oof_artifacts import (
@@ -13,6 +15,7 @@ from src.oof_artifacts import (
     EXPECTED_TRAINING_ROWS,
     EXPECTED_TRAINING_TERMS,
     OOF_FILENAMES,
+    load_oof_artifacts,
     validate_oof_artifacts,
     write_oof_manifest,
 )
@@ -75,6 +78,40 @@ class OofArtifactContractTests(unittest.TestCase):
         self.write_manifest()
         manifest = validate_oof_artifacts(self.temp_dir.name)
         self.assertEqual(manifest["validation"]["group_column"], "term_id")
+
+    def test_loader_checks_array_shapes_values_and_folds(self):
+        arrays = {
+            "oof_lgbm.npy": np.linspace(0, 1, 500, dtype=np.float32),
+            "test_lgbm.npy": np.linspace(0, 1, 20, dtype=np.float32),
+            "oof_xgb.npy": np.linspace(1, 0, 500, dtype=np.float32),
+            "test_xgb.npy": np.linspace(1, 0, 20, dtype=np.float32),
+            "y_true.npy": np.tile([0, 1], 250).astype(np.int8),
+            "fold_ids.npy": np.tile(np.arange(5), 100).astype(np.int8),
+        }
+        for filename, values in arrays.items():
+            with open(os.path.join(self.temp_dir.name, filename), "wb") as output_file:
+                np.save(output_file, values, allow_pickle=False)
+        self.write_manifest()
+        manifest, loaded = load_oof_artifacts(self.temp_dir.name)
+        self.assertEqual(manifest["training"]["rows"], 500)
+        self.assertEqual(len(loaded["test_xgb.npy"]), 20)
+
+    def test_consumer_rejects_manifest_for_different_source_data(self):
+        self.write_manifest()
+        source_dir = os.path.join(self.temp_dir.name, "source")
+        os.makedirs(source_dir)
+        for filename in (
+            "terms.csv",
+            "items.csv",
+            "training_pairs.csv",
+            "submission_pairs.csv",
+        ):
+            with open(os.path.join(source_dir, filename), "w", encoding="utf-8") as source:
+                source.write("different data")
+        with self.assertRaisesRegex(ValueError, "source data SHA-256 mismatch"):
+            validate_oof_artifacts(
+                self.temp_dir.name, source_data_dir=source_dir
+            )
 
     def test_production_consumers_reject_sample_oof_artifacts(self):
         self.write_manifest()

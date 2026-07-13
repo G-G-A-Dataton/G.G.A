@@ -51,12 +51,33 @@ def split_errors(df, oof_preds, threshold=0.5):
     tuple of pd.DataFrame
         (false_positives, false_negatives, true_positives, true_negatives)
     """
+    if "label" not in df.columns or df.empty:
+        raise ValueError("df must contain a non-empty label column")
+    oof_preds = np.asarray(oof_preds, dtype=np.float64)
+    if (
+        oof_preds.ndim != 1
+        or len(oof_preds) != len(df)
+        or not np.isfinite(oof_preds).all()
+        or ((oof_preds < 0) | (oof_preds > 1)).any()
+    ):
+        raise ValueError("oof_preds must be aligned finite probabilities in [0, 1]")
+    try:
+        threshold_value = float(threshold)
+    except (TypeError, ValueError):
+        threshold_value = np.nan
+    if isinstance(threshold, bool) or not np.isfinite(threshold_value) or not (
+        0 <= threshold_value <= 1
+    ):
+        raise ValueError("threshold must be a finite scalar in [0, 1]")
+    threshold = threshold_value
+    y = df["label"].to_numpy()
+    if not np.isin(y, [0, 1]).all():
+        raise ValueError("label must be binary")
+
     # Olasılık tahminini binary'e çevir
     preds = (oof_preds >= threshold).astype(int)
 
     # Her kategoriyi bir boolean mask olarak tanımla
-    y = df["label"].values
-
     # Gerçekte 0, model 1 dedi → False Positive (aşırı geniş tahmin)
     fp_mask = (preds == 1) & (y == 0)
     # Gerçekte 1, model 0 dedi → False Negative (kaçırılan eşleşme)
@@ -67,10 +88,18 @@ def split_errors(df, oof_preds, threshold=0.5):
     tn_mask = (preds == 0) & (y == 0)
 
     # Her maskeye ek bilgi ekle: tahmin olasılığı ve hata türü
-    fp_df = df[fp_mask].copy(); fp_df["proba"] = oof_preds[fp_mask]; fp_df["error_type"] = "FP"
-    fn_df = df[fn_mask].copy(); fn_df["proba"] = oof_preds[fn_mask]; fn_df["error_type"] = "FN"
-    tp_df = df[tp_mask].copy(); tp_df["proba"] = oof_preds[tp_mask]; tp_df["error_type"] = "TP"
-    tn_df = df[tn_mask].copy(); tn_df["proba"] = oof_preds[tn_mask]; tn_df["error_type"] = "TN"
+    fp_df = df[fp_mask].copy()
+    fn_df = df[fn_mask].copy()
+    tp_df = df[tp_mask].copy()
+    tn_df = df[tn_mask].copy()
+    for subset, mask, error_type in (
+        (fp_df, fp_mask, "FP"),
+        (fn_df, fn_mask, "FN"),
+        (tp_df, tp_mask, "TP"),
+        (tn_df, tn_mask, "TN"),
+    ):
+        subset["proba"] = oof_preds[mask]
+        subset["error_type"] = error_type
 
     return fp_df, fn_df, tp_df, tn_df
 
@@ -109,9 +138,7 @@ def analyze_error_patterns(fp_df, fn_df, n_top=10):
             return "unknown"
         return cat.split("/")[0].strip()
 
-    if "category" in fp_df.columns:
-        fp_df = fp_df.copy()
-        fn_df = fn_df.copy()
+    if "category" in fp_df.columns and "category" in fn_df.columns:
         fp_df["cat_l1"] = fp_df["category"].apply(get_l1)
         fn_df["cat_l1"] = fn_df["category"].apply(get_l1)
 
@@ -126,7 +153,7 @@ def analyze_error_patterns(fp_df, fn_df, n_top=10):
         )
 
     # Marka bazlı analiz (marka karışıklığı önemli bir hata kaynağı)
-    if "brand" in fp_df.columns:
+    if "brand" in fp_df.columns and "brand" in fn_df.columns:
         results["fp_by_brand"] = (
             fp_df["brand"].value_counts().head(n_top)
         )
@@ -140,7 +167,9 @@ def analyze_error_patterns(fp_df, fn_df, n_top=10):
         "query_title_overlap", "query_category_overlap",
         "query_brand_match", "tfidf_cosine"
     ]
-    available = [c for c in feature_cols if c in fp_df.columns]
+    available = [
+        c for c in feature_cols if c in fp_df.columns and c in fn_df.columns
+    ]
     if available:
         results["fp_feature_stats"] = fp_df[available].describe().round(3)
         results["fn_feature_stats"] = fn_df[available].describe().round(3)
@@ -164,13 +193,22 @@ def find_hard_cases(fp_df, fn_df, n=10):
         Her kategoriden gösterilecek örnek sayısı.
     """
     cols = ["query", "title", "category", "brand", "proba", "error_type"]
-    available = [c for c in cols if c in fp_df.columns]
+    fp_columns = [c for c in cols if c in fp_df.columns]
+    fn_columns = [c for c in cols if c in fn_df.columns]
 
     # Güvenli FP: olasılık > 0.8 iken gerçek etiket 0
-    confident_fp = fp_df.nlargest(n, "proba")[available] if len(fp_df) > 0 else pd.DataFrame()
+    confident_fp = (
+        fp_df.nlargest(n, "proba")[fp_columns]
+        if len(fp_df) > 0
+        else pd.DataFrame(columns=fp_columns)
+    )
 
     # Güvenli FN: olasılık < 0.2 iken gerçek etiket 1
-    confident_fn = fn_df.nsmallest(n, "proba")[available] if len(fn_df) > 0 else pd.DataFrame()
+    confident_fn = (
+        fn_df.nsmallest(n, "proba")[fn_columns]
+        if len(fn_df) > 0
+        else pd.DataFrame(columns=fn_columns)
+    )
 
     return confident_fp, confident_fn
 
@@ -256,10 +294,8 @@ def _write_markdown_report(fp_df, fn_df, tp_df, tn_df, patterns, path, threshold
     """Hata analizi sonuçlarını Markdown formatında dosyaya yazar."""
     n = len(fp_df) + len(fn_df) + len(tp_df) + len(tn_df)
     lines = [
-        "# Baseline Hata Analizi Notları",
+        "# Grouped OOF Error Analysis",
         "",
-        f"**Tarih:** 6 Temmuz 2026  ",
-        f"**Hazırlayan:** Ömer Faruk Kara  ",
         f"**Threshold:** {threshold}",
         "",
         "---",
@@ -297,17 +333,13 @@ def _write_markdown_report(fp_df, fn_df, tp_df, tn_df, patterns, path, threshold
         "",
         "---",
         "",
-        "## 3. Öneriler",
+        "## 3. Interpretation Guardrails",
         "",
-        "Yukarıdaki analiz sonucuna göre aşağıdaki iyileştirmeler planlanabilir:",
-        "",
-        "- **FP yoğun kategorilerde**: TF-IDF / embedding feature'ı güçlendirmek",
-        "- **FN yoğun kategorilerde**: Daha spesifik (L2/L3) kategori feature'ı eklemek",
-        "- **Marka hataları**: Brand matching fonksiyonunu iyileştirmek",
-        "- **Genel**: BM25 hard negative ekleyerek modeli daha seçici hale getirmek (7 Temmuz)",
+        "Counts show where errors concentrate, but do not establish causality. Compare normalized error rates against category and brand support before changing features or sampling.",
     ]
 
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 

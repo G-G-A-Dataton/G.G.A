@@ -48,7 +48,9 @@ G.G.A/
 │   ├── context_features.py      # 9 candidate-relative rank/gap features
 │   ├── candidate_sampling.py    # Test-shaped, leakage-free candidate generation
 │   ├── modeling.py              # Shared grouped OOF/threshold/ensemble contracts
+│   ├── oof_artifacts.py         # Hash-verified shortlist artifact contract
 │   ├── out_of_core_features.py  # Global context features with bounded RAM
+│   ├── data_freeze.py           # Frozen source-data verifier
 │   ├── metrics.py               # Macro-F1, threshold, term_id gruplu CV
 │   ├── negative_sampling.py     # Random & BM25 hard negative üretimi
 │   ├── bm25_hard_negative.py    # BM25 hard negative örnekleyici
@@ -64,17 +66,15 @@ G.G.A/
 │   └── error_analysis.py        # FP/FN hata analizi
 ├── scripts/                     # Çalıştırılabilir scriptler
 │   ├── training/                # Model eğitimi
-│   │   ├── run_baseline.py          # LightGBM baseline (5-Fold CV)
-│   │   ├── run_baseline_tfidf.py    # TF-IDF özellikli baseline
-│   │   ├── run_lgbm_tuning.py       # Parametre tuning (EXP-008)
-│   │   ├── run_model_comparison.py  # LGBM vs XGBoost (EXP-009)
-│   │   └── run_train_full_v2.py     # Tam eğitim seti ile eğitim
+│   │   ├── run_model_shortlist.py   # Final LGBM/XGB grouped shortlist
+│   │   └── run_train_full_v2.py     # Single-LGBM fallback
 │   ├── analysis/                # Analiz & deney
 │   │   ├── run_feature_importance.py    # Feature importance (5-Fold gain)
-│   │   ├── run_threshold_analysis.py    # Optimal threshold taraması
+│   │   ├── run_threshold_analysis.py    # Verified OOF threshold diagnostics
 │   │   ├── run_deney_matrisi_v2.py      # 4x4 oran × feature seti deneyi
-│   │   ├── run_ensemble_comparison.py   # LGBM + XGB ensemble karşılaştırma
-│   │   └── run_hata_taksonomisi.py      # FP/FN hata sınıflandırma
+│   │   ├── run_ensemble_comparison.py   # Cross-fitted shortlist comparison
+│   │   ├── run_ensemble_optimization.py # Final model/weight/threshold selection
+│   │   └── run_hata_taksonomisi.py      # Fold-external error taxonomy
 │   ├── embedding/               # Embedding üretimi
 │   │   ├── run_term_embeddings.py           # Term embedding üretim runner
 │   │   └── run_embedding_score_comparison.py # Embedding cosine feature etkisi
@@ -88,10 +88,10 @@ G.G.A/
 ├── docs/                        # Dokümantasyon & raporlar
 │   ├── experiment_log.md            # Tüm deney geçmişi (EXP-001 → EXP-009)
 │   ├── feature_importance_raporu.md # Feature önem analizi (10 Temmuz)
-│   ├── threshold_analizi.md         # Optimal threshold raporu (11 Temmuz)
-│   ├── deney_matrisi_v2.md          # Oran × feature deney matrisi (11 Temmuz)
-│   ├── ensemble_karsilastirma.md    # Ensemble sonuçları (13 Temmuz)
-│   ├── hata_taksonomisi.md          # FP/FN sınıflandırma (12 Temmuz)
+│   ├── threshold_analysis.md        # Current threshold diagnostics (generated)
+│   ├── experiment_matrix_v2.md      # Current grouped ablation (generated)
+│   ├── ensemble_selection.md        # Final shortlist decision (generated)
+│   ├── error_taxonomy.md            # Current error taxonomy (generated)
 │   ├── embedding_skor_kiyasi.md     # Embedding cosine etkisi (12 Temmuz)
 │   ├── teknik_rapor_v1.md           # EDA & feature bulguları (10 Temmuz)
 │   ├── rapor_yontem_v1.md           # Yöntem bölümü (13 Temmuz)
@@ -125,30 +125,31 @@ G.G.A/
 # 1. Test, environment, frozen-data and relationship verification
 python scripts/run_production.py --stage verify
 
-# 2. Üretim artifact setini tam veriyle eğit
+# 2. LGBM/XGB shortlist artefaktlarını tam veriyle eğit
 python scripts/run_production.py --stage train
 
-# 3. Manifest doğrulamalı submission üret
+# 3. Cross-fitted model seçimiyle manifest doğrulamalı submission üret
 python scripts/run_production.py --stage predict
 ```
 
-`--sample-terms` eğitimi `outputs/sample_artifacts_v2/` altında izole edilir ve
-üretim inference akışı tarafından kabul edilmez. Tam operasyon adımları için
-[`RUNBOOK.md`](RUNBOOK.md) kanonik kaynaktır.
+Hızlı smoke eğitimleri doğrudan `run_model_shortlist.py --sample-terms ...`
+ile çalıştırılır, ayrı sample artefakt dizinine yazılır ve üretim seçimi
+tarafından kabul edilmez. Tam operasyon adımları için [`RUNBOOK.md`](RUNBOOK.md)
+kanonik kaynaktır.
+
+Varsayılan akış LightGBM, XGBoost ve weighted blend adaylarını karşılaştırır.
+Tekil LightGBM fallback'i yalnızca `--pipeline lightgbm` ile açıkça seçilir.
 
 ### Analiz Scriptleri
 
 ```bash
-# Feature önemi (hangi feature ne kadar önemli?)
-python scripts/analysis/run_feature_importance.py
-
-# Optimal threshold taraması
+# Hash doğrulamalı OOF threshold tanılaması
 python scripts/analysis/run_threshold_analysis.py
 
 # Negatif oran × feature kombinasyon deneyi (4×4 grid)
 python scripts/analysis/run_deney_matrisi_v2.py
 
-# LGBM vs XGBoost vs Ensemble
+# LGBM vs XGBoost vs weighted blend
 python scripts/analysis/run_ensemble_comparison.py
 
 # Hatalı tahminlerin sınıflandırılması
@@ -211,7 +212,7 @@ pip install -r requirements.txt
 ### Adım 4: Kurulumu Doğrula
 
 ```bash
-python -c "import pandas, numpy, torch, sentence_transformers, lightgbm; print('✅ Tüm paketler başarıyla yüklendi!')"
+python scripts/verify_environment.py
 ```
 
 ### 📦 Temel Bağımlılıklar

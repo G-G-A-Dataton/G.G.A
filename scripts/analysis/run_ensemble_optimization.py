@@ -13,18 +13,17 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.modeling import (
-    cross_fitted_ensemble_evaluation,
-    cross_fitted_threshold_evaluation,
+    select_cross_fitted_candidate,
 )
-from src.oof_artifacts import validate_oof_artifacts
+from src.oof_artifacts import load_oof_artifacts
 from src.validate_submission import validate_submission
 
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
 DEFAULT_ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
-DEFAULT_OUTPUT = os.path.join(OUTPUT_DIR, "submission_ensemble_candidate.csv")
-DEFAULT_REPORT = os.path.join(PROJECT_ROOT, "docs", "ensemble_karsilastirma.md")
+DEFAULT_OUTPUT = os.path.join(OUTPUT_DIR, "submission_v2.csv")
+DEFAULT_REPORT = os.path.join(PROJECT_ROOT, "docs", "ensemble_selection.md")
 
 
 def parse_args(argv=None):
@@ -39,13 +38,6 @@ def parse_args(argv=None):
         help="Allow sample artifacts for pipeline smoke tests",
     )
     return parser.parse_args(argv)
-
-
-def _load_array(artifact_dir, filename):
-    values = np.load(os.path.join(artifact_dir, filename), mmap_mode="r")
-    if values.ndim != 1 or not np.isfinite(values).all():
-        raise ValueError(f"{filename} must be a finite one-dimensional array")
-    return values
 
 
 def _atomic_write_json(path, payload):
@@ -93,65 +85,28 @@ def main(argv=None):
     args = parse_args(argv)
     if args.chunk_size <= 0:
         raise ValueError("--chunk-size must be positive")
-    manifest = validate_oof_artifacts(
-        args.artifact_dir, require_full=not args.allow_sample
+    manifest, arrays = load_oof_artifacts(
+        args.artifact_dir,
+        require_full=not args.allow_sample,
+        source_data_dir=DATA_DIR,
     )
-    arrays = {
-        filename: _load_array(args.artifact_dir, filename)
-        for filename in (
-            "oof_lgbm.npy",
-            "test_lgbm.npy",
-            "oof_xgb.npy",
-            "test_xgb.npy",
-            "y_true.npy",
-            "fold_ids.npy",
-        )
-    }
     training_rows = manifest["training"]["rows"]
     test_rows = manifest["test_rows"]
-    if any(
-        len(arrays[name]) != training_rows
-        for name in ("oof_lgbm.npy", "oof_xgb.npy", "y_true.npy", "fold_ids.npy")
-    ) or any(
-        len(arrays[name]) != test_rows
-        for name in ("test_lgbm.npy", "test_xgb.npy")
-    ):
-        raise ValueError("Prediction array lengths do not match the OOF manifest")
 
     y_true = arrays["y_true.npy"]
     fold_ids = arrays["fold_ids.npy"]
-    lgb_report = cross_fitted_threshold_evaluation(
-        y_true, arrays["oof_lgbm.npy"], fold_ids
-    )
-    xgb_report = cross_fitted_threshold_evaluation(
-        y_true, arrays["oof_xgb.npy"], fold_ids
-    )
-    blend_report = cross_fitted_ensemble_evaluation(
+    selection = select_cross_fitted_candidate(
         y_true,
         arrays["oof_lgbm.npy"],
         arrays["oof_xgb.npy"],
         fold_ids,
     )
-    candidates = {
-        "lightgbm": (
-            lgb_report["cross_fitted_macro_f1"],
-            1.0,
-            lgb_report["deploy_threshold"],
-        ),
-        "xgboost": (
-            xgb_report["cross_fitted_macro_f1"],
-            0.0,
-            xgb_report["deploy_threshold"],
-        ),
-        "weighted_blend": (
-            blend_report["cross_fitted_macro_f1"],
-            blend_report["deploy_first_model_weight"],
-            blend_report["deploy_threshold"],
-        ),
-    }
-    selected_model, (_, weight, threshold) = max(
-        candidates.items(), key=lambda item: (item[1][0], item[0] == "weighted_blend")
-    )
+    lgb_report = selection["validation"]["lightgbm"]
+    xgb_report = selection["validation"]["xgboost"]
+    blend_report = selection["validation"]["weighted_blend"]
+    selected_model = selection["deploy"]["selected_model"]
+    weight = selection["deploy"]["lightgbm_weight"]
+    threshold = selection["deploy"]["threshold"]
 
     if args.allow_sample and os.path.realpath(args.output) == os.path.realpath(
         DEFAULT_OUTPUT
@@ -233,7 +188,8 @@ def main(argv=None):
         positive_rate,
     )
     print(
-        f"Selected={selected_model} cross-fitted Macro-F1={candidates[selected_model][0]:.6f} "
+        f"Selected={selected_model} cross-fitted Macro-F1="
+        f"{selection['deploy']['cross_fitted_macro_f1']:.6f} "
         f"weight={weight:.3f} threshold={threshold:.8f} output={args.output}"
     )
     return args.output

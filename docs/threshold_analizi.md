@@ -4,6 +4,8 @@
 > **Historical, invalidated threshold.** `0.35` came from legacy row-level OOF
 > predictions. Production loads the threshold created by the next full grouped
 > training run; no fixed threshold is currently approved.
+> Current runner: `python scripts/analysis/run_threshold_analysis.py`; new
+> results are written to `docs/threshold_analysis.md`.
 
 **Hazırlayan:** Ahmet Emin Işın  
 **Tarih:** 11 Temmuz 2026  

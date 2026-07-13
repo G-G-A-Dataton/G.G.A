@@ -138,6 +138,144 @@ def cross_fitted_ensemble_evaluation(
     }
 
 
+def select_cross_fitted_candidate(
+    y_true,
+    lightgbm_probabilities,
+    xgboost_probabilities,
+    fold_ids,
+    weights=None,
+):
+    """Select LightGBM, XGBoost, or their blend on held-out fold results."""
+    lightgbm_report = cross_fitted_threshold_evaluation(
+        y_true, lightgbm_probabilities, fold_ids
+    )
+    xgboost_report = cross_fitted_threshold_evaluation(
+        y_true, xgboost_probabilities, fold_ids
+    )
+    blend_report = cross_fitted_ensemble_evaluation(
+        y_true,
+        lightgbm_probabilities,
+        xgboost_probabilities,
+        fold_ids,
+        weights=weights,
+    )
+    candidates = {
+        "lightgbm": {
+            "cross_fitted_macro_f1": lightgbm_report["cross_fitted_macro_f1"],
+            "lightgbm_weight": 1.0,
+            "xgboost_weight": 0.0,
+            "threshold": lightgbm_report["deploy_threshold"],
+        },
+        "xgboost": {
+            "cross_fitted_macro_f1": xgboost_report["cross_fitted_macro_f1"],
+            "lightgbm_weight": 0.0,
+            "xgboost_weight": 1.0,
+            "threshold": xgboost_report["deploy_threshold"],
+        },
+        "weighted_blend": {
+            "cross_fitted_macro_f1": blend_report["cross_fitted_macro_f1"],
+            "lightgbm_weight": blend_report["deploy_first_model_weight"],
+            "xgboost_weight": blend_report["deploy_second_model_weight"],
+            "threshold": blend_report["deploy_threshold"],
+        },
+    }
+    selected_model, deploy = max(
+        candidates.items(),
+        key=lambda item: (
+            item[1]["cross_fitted_macro_f1"],
+            item[0] == "weighted_blend",
+        ),
+    )
+    return {
+        "validation": {
+            "lightgbm": lightgbm_report,
+            "xgboost": xgboost_report,
+            "weighted_blend": blend_report,
+        },
+        "candidates": candidates,
+        "deploy": {"selected_model": selected_model, **deploy},
+    }
+
+
+def predictions_from_cross_fitted_selection(
+    lightgbm_probabilities,
+    xgboost_probabilities,
+    fold_ids,
+    selection,
+):
+    """Apply fold-specific parameters from a shortlist selection report."""
+    probabilities, thresholds = _cross_fitted_selection_outputs(
+        lightgbm_probabilities,
+        xgboost_probabilities,
+        fold_ids,
+        selection,
+    )
+    return (probabilities >= thresholds).astype(np.int8)
+
+
+def probabilities_from_cross_fitted_selection(
+    lightgbm_probabilities,
+    xgboost_probabilities,
+    fold_ids,
+    selection,
+):
+    """Return the fold-specific probabilities used for held-out error analysis."""
+    probabilities, _ = _cross_fitted_selection_outputs(
+        lightgbm_probabilities,
+        xgboost_probabilities,
+        fold_ids,
+        selection,
+    )
+    return probabilities
+
+
+def _cross_fitted_selection_outputs(
+    lightgbm_probabilities,
+    xgboost_probabilities,
+    fold_ids,
+    selection,
+):
+    lightgbm_probabilities = np.asarray(lightgbm_probabilities, dtype=np.float64)
+    xgboost_probabilities = np.asarray(xgboost_probabilities, dtype=np.float64)
+    fold_ids = np.asarray(fold_ids)
+    if (
+        lightgbm_probabilities.ndim != 1
+        or xgboost_probabilities.shape != lightgbm_probabilities.shape
+        or fold_ids.shape != lightgbm_probabilities.shape
+    ):
+        raise ValueError("probabilities and fold_ids must be aligned vectors")
+    if not np.isfinite(lightgbm_probabilities).all() or not np.isfinite(
+        xgboost_probabilities
+    ).all():
+        raise ValueError("probabilities must be finite")
+
+    selected_model = selection["deploy"]["selected_model"]
+    report = selection["validation"][selected_model]
+    fold_parameters = {row["fold"]: row for row in report["folds"]}
+    selected_probabilities = np.zeros(len(fold_ids), dtype=np.float64)
+    thresholds = np.zeros(len(fold_ids), dtype=np.float64)
+    for fold in np.unique(fold_ids):
+        if int(fold) not in fold_parameters:
+            raise ValueError(f"selection report is missing fold {int(fold)}")
+        mask = fold_ids == fold
+        parameters = fold_parameters[int(fold)]
+        if selected_model == "lightgbm":
+            probabilities = lightgbm_probabilities[mask]
+        elif selected_model == "xgboost":
+            probabilities = xgboost_probabilities[mask]
+        elif selected_model == "weighted_blend":
+            weight = parameters["first_model_weight"]
+            probabilities = (
+                weight * lightgbm_probabilities[mask]
+                + (1.0 - weight) * xgboost_probabilities[mask]
+            )
+        else:
+            raise ValueError(f"unsupported selected model: {selected_model}")
+        selected_probabilities[mask] = probabilities
+        thresholds[mask] = parameters["threshold"]
+    return selected_probabilities, thresholds
+
+
 def _select_blend(y_true, first, second, weights):
     candidates = []
     for weight in weights:

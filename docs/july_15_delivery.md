@@ -18,9 +18,9 @@
 
 ## Measured Acceptance Runs
 
-- 66 regression/integration tests passed.
+- 77 regression/integration tests passed.
 - Full data freeze verification passed for 5 files and 3,359,679 submission rows.
-- Environment verification passed for Python 3.13.5 and 18 pinned packages.
+- Environment verification passed for Python 3.13.5 and 17 pinned packages.
 - Canonical 20-term training smoke generated 2,396 candidates and five model folds.
 - Ten-term dual-model shortlist generated all 10 models, OOF/fold arrays, 200 predictions, and a QA-passing sample submission.
 - Compact BM25 indexed 20,000 real products in 2.71 seconds at about 140 MB peak RSS.

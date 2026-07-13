@@ -8,6 +8,8 @@ from src.modeling import (
     build_group_fold_ids,
     cross_fitted_ensemble_evaluation,
     cross_fitted_threshold_evaluation,
+    predictions_from_cross_fitted_selection,
+    select_cross_fitted_candidate,
 )
 
 
@@ -66,6 +68,27 @@ class ModelingEvaluationTests(unittest.TestCase):
             report["deploy_first_model_weight"]
             + report["deploy_second_model_weight"],
             1.0,
+        )
+
+    def test_shortlist_selection_reuses_fold_specific_decisions(self):
+        fold_ids = build_group_fold_ids(self.y, self.groups, n_splits=3)
+        selection = select_cross_fitted_candidate(
+            self.y,
+            self.first,
+            self.second,
+            fold_ids,
+            weights=[0.0, 0.5, 1.0],
+        )
+        predictions = predictions_from_cross_fitted_selection(
+            self.first,
+            self.second,
+            fold_ids,
+            selection,
+        )
+        self.assertTrue(np.array_equal(predictions, self.y))
+        self.assertIn(
+            selection["deploy"]["selected_model"],
+            {"lightgbm", "xgboost", "weighted_blend"},
         )
 
 

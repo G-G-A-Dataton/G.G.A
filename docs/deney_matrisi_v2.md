@@ -4,6 +4,8 @@
 > **Historical, invalidated matrix.** These scores used row-level CV and the old
 > sampling/attribute contracts. Rerun the matrix with grouped validation before
 > selecting a ratio or feature set.
+> Current runner: `python scripts/analysis/run_deney_matrisi_v2.py`; new results
+> are written to `docs/experiment_matrix_v2.md`.
 
 **Hazırlayan:** Ömer Faruk Kara  
 **Tarih:** 11 Temmuz 2026  

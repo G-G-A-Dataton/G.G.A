@@ -8,7 +8,7 @@ This is the canonical offline-capable workflow. Run commands from the repository
 python scripts/run_production.py --stage verify
 ```
 
-The gate runs 66 regression tests, verifies every pinned package, checks the versioned data freeze in `configs/final_v1.json`, and validates all CSV relationships. Any mismatch stops the run.
+The gate runs 77 regression tests, verifies every pinned package, checks the versioned data freeze in `configs/final_v1.json`, and validates all CSV relationships. Any mismatch stops the run.
 
 ## 2. Production Training
 
@@ -16,27 +16,32 @@ The gate runs 66 regression tests, verifies every pinned package, checks the ver
 python scripts/run_production.py --stage train
 ```
 
-The trainer builds 1,877,700 test-shaped candidates from all 250,000 positives. Each query receives `max(100, ceil(2 * positives))` candidates; half of the negative quota targets the positive products' L2 categories and the remainder comes from the catalog. All known positives are excluded.
+The default shortlist trainer builds 1,877,700 test-shaped candidates from all 250,000 positives. Each query receives `max(100, ceil(2 * positives))` candidates; half of the negative quota targets the positive products' L2 categories and the remainder comes from the catalog. All known positives are excluded.
 
-Five LightGBM models use `StratifiedGroupKFold(group=term_id)`. Threshold selection is cross-fitted: each validation fold is evaluated with a threshold selected only on the other folds. The deploy threshold is then selected from all OOF predictions and is explicitly labeled as a deployment parameter, not an unbiased score.
+Five LightGBM and five XGBoost models use the same `StratifiedGroupKFold(group=term_id)` assignment and feature matrix. Test predictions are streamed through disk-backed feature stores because submission term groups are not contiguous.
 
-Production artifacts in `outputs/` include models, TF-IDF vectorizer, OOF predictions, threshold report, feature importance, and `model_manifest_v2.json`. The manifest binds feature schemas, Git revision, source-data hashes, candidate distribution, metrics, and artifact hashes.
+Production artifacts in `outputs/ensemble_artifacts/` include ten models, TF-IDF vectorizer, OOF labels/folds/predictions, full test predictions, and `oof_manifest.json`. The manifest binds feature schemas, a clean Git revision, source-data hashes, candidate distribution, and every artifact hash.
 
 Quick runs use complete query groups and cannot overwrite production artifacts:
 
 ```bash
-python scripts/training/run_train_full_v2.py \
-  --sample-terms 300 --num-boost-round 200 --no-error-analysis
+python scripts/training/run_model_shortlist.py \
+  --sample-terms 300 --test-sample 50000 --num-boost-round 200
 ```
 
-## 3. Shortlist And Ensemble
+The single-LightGBM fallback remains available explicitly:
 
 ```bash
-python scripts/training/run_model_shortlist.py
-python scripts/analysis/run_ensemble_optimization.py
+python scripts/run_production.py --stage train --pipeline lightgbm
 ```
 
-The shortlist trains five LightGBM and five XGBoost folds on the same matrix. Test features are written to disk-backed stores because `submission_pairs.csv` does not keep query groups contiguous. Ensemble weight and threshold are selected outside each evaluated fold. A blend is promoted only when its cross-fitted Macro-F1 exceeds both single models.
+## 3. Model Selection
+
+```bash
+python scripts/run_production.py --stage predict
+```
+
+LightGBM, XGBoost, and weighted blend candidates are compared by cross-fitted Macro-F1. Each validation fold uses weights and a threshold selected only on the other folds. A blend is promoted only when it beats both single models. The deploy threshold is selected on all OOF rows and is labeled as a deployment parameter, not an unbiased score.
 
 ## 4. Inference And QA
 
@@ -44,7 +49,13 @@ The shortlist trains five LightGBM and five XGBoost folds on the same matrix. Te
 python scripts/run_production.py --stage predict
 ```
 
-Inference verifies artifact and source hashes, computes global candidate-relative features out of core, streams predictions, and atomically publishes `outputs/submission_v2.csv` only after QA. The output must contain 3,359,679 unique IDs in exact sample order and integer predictions in `{0, 1}`.
+Selection verifies artifact and current source-data hashes, streams the selected full-test probabilities, and atomically publishes `outputs/submission_v2.csv` only after QA. The output must contain 3,359,679 unique IDs in exact sample order and integer predictions in `{0, 1}`.
+
+The LightGBM fallback inference independently recomputes global candidate-relative features out of core:
+
+```bash
+python scripts/run_production.py --stage predict --pipeline lightgbm
+```
 
 ```bash
 python -m src.validate_submission \

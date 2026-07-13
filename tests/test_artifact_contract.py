@@ -290,6 +290,14 @@ class ArtifactContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cannot write"):
                 run_train_full_v2.main()
 
+    def test_versioned_training_rejects_dirty_worktree(self):
+        dirty_status = mock.Mock(stdout=" M src/features.py\n")
+        with mock.patch.object(
+            run_train_full_v2.subprocess, "run", return_value=dirty_status
+        ):
+            with self.assertRaisesRegex(RuntimeError, "dirty worktree"):
+                run_train_full_v2.git_revision()
+
     def test_complete_term_iterator_rejects_reappearing_groups(self):
         chunks = [
             pd.DataFrame({"term_id": ["t1", "t1", "t2"]}),

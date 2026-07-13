@@ -5,6 +5,8 @@ import json
 import os
 import re
 
+import numpy as np
+
 from src.candidate_sampling import CANDIDATE_SAMPLING_SCHEMA_VERSION
 from src.context_features import CONTEXT_FEATURE_SCHEMA_VERSION
 from src.features import FEATURE_SCHEMA_VERSION
@@ -96,7 +98,7 @@ def write_oof_manifest(
     return manifest_path
 
 
-def validate_oof_artifacts(output_dir, require_full=False):
+def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None):
     manifest_path = os.path.join(output_dir, OOF_MANIFEST)
     if not os.path.exists(manifest_path):
         raise FileNotFoundError(f"Missing OOF manifest: {manifest_path}")
@@ -174,16 +176,24 @@ def validate_oof_artifacts(output_dir, require_full=False):
         errors.append("test_rows must be a positive integer")
 
     source_hashes = manifest.get("source_data_sha256", {})
-    if set(source_hashes) != {
+    valid_source_hashes = isinstance(source_hashes, dict) and set(source_hashes) == {
         "terms.csv",
         "items.csv",
         "training_pairs.csv",
         "submission_pairs.csv",
-    } or any(
+    } and not any(
         not re.fullmatch(r"[0-9a-f]{64}", str(value))
         for value in source_hashes.values()
-    ):
+    )
+    if not valid_source_hashes:
         errors.append("source data SHA-256 contract mismatch")
+    if source_data_dir is not None and valid_source_hashes:
+        for filename, expected_hash in source_hashes.items():
+            source_path = os.path.join(source_data_dir, filename)
+            if not os.path.isfile(source_path):
+                errors.append(f"missing source data: {filename}")
+            elif sha256_file(source_path) != expected_hash:
+                errors.append(f"source data SHA-256 mismatch: {filename}")
 
     if require_full and (
         manifest.get("training_mode") != "full"
@@ -205,3 +215,37 @@ def validate_oof_artifacts(output_dir, require_full=False):
     if errors:
         raise ValueError("Invalid OOF artifact manifest: " + "; ".join(errors))
     return manifest
+
+
+def load_oof_artifacts(output_dir, require_full=False, source_data_dir=None):
+    """Validate a shortlist artifact directory and load aligned mmap arrays."""
+    manifest = validate_oof_artifacts(
+        output_dir,
+        require_full=require_full,
+        source_data_dir=source_data_dir,
+    )
+    arrays = {
+        filename: np.load(os.path.join(output_dir, filename), mmap_mode="r")
+        for filename in OOF_FILENAMES
+    }
+    for filename, values in arrays.items():
+        if values.ndim != 1 or not np.isfinite(values).all():
+            raise ValueError(f"{filename} must be a finite one-dimensional array")
+
+    training_rows = manifest["training"]["rows"]
+    test_rows = manifest["test_rows"]
+    training_files = ("oof_lgbm.npy", "oof_xgb.npy", "y_true.npy", "fold_ids.npy")
+    test_files = ("test_lgbm.npy", "test_xgb.npy")
+    if any(len(arrays[name]) != training_rows for name in training_files):
+        raise ValueError("Training array lengths do not match the OOF manifest")
+    if any(len(arrays[name]) != test_rows for name in test_files):
+        raise ValueError("Test array lengths do not match the OOF manifest")
+    for name in ("oof_lgbm.npy", "oof_xgb.npy", "test_lgbm.npy", "test_xgb.npy"):
+        if ((arrays[name] < 0) | (arrays[name] > 1)).any():
+            raise ValueError(f"{name} contains values outside [0, 1]")
+    if not np.isin(arrays["y_true.npy"], [0, 1]).all():
+        raise ValueError("y_true.npy must contain binary labels")
+    expected_folds = np.arange(manifest["validation"]["n_splits"])
+    if not np.array_equal(np.unique(arrays["fold_ids.npy"]), expected_folds):
+        raise ValueError("fold_ids.npy does not contain the expected folds")
+    return manifest, arrays

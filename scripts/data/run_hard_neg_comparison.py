@@ -1,284 +1,232 @@
-"""
-run_hard_neg_comparison.py
-==========================
-G.G.A Takımı — Hard Negative vs Random Negative Skor Kıyası (7 Temmuz Görevi)
+"""Compare random and BM25 negatives with complete-term grouped validation."""
 
-Ömer Faruk Kara tarafından hazırlanmıştır.
-
-AMAÇ:
-  Negatif örnekleme stratejisinin model kalitesine etkisini ölçmek.
-
-  Random Negative: Katalogdan tamamen rastgele seçilen ürünler.
-    → Kolay negatifleri içerir (çok belirgin alakasız örnekler).
-    → Model çok kolay öğrenir ama gerçek dünyada yanılır.
-
-  BM25 Hard Negative: Sorguya benzer ama pozitif olmayan ürünler.
-    → Zor negatifleri içerir ("spor ayakkabı" sorgusunda başka marka sneaker).
-    → Model daha dikkatli olmak zorunda kalır → genellikle daha iyi F1.
-
-KULLANIM:
-  1. Sadece Random Negative (şu an):
-       python run_hard_neg_comparison.py
-
-  2. BM25 negatifleri hazır olduğunda (Mert'in negative_bm25_v1 dosyasıyla):
-       python run_hard_neg_comparison.py --bm25 outputs/negative_bm25_v1.csv
-"""
-
+import argparse
 import os
 import sys
-import argparse
-import warnings
+import time
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.data              import load_terms, load_items
-from src.features          import build_features, FEATURE_COLS
+from src.candidate_sampling import sample_complete_terms
+from src.data import load_items, load_terms
+from src.features import FEATURE_COLS, build_features
+from src.modeling import build_group_fold_ids, cross_fitted_threshold_evaluation
 from src.negative_sampling import build_training_set, verify_no_leakage
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
-import lightgbm as lgb
-
-DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Karşılaştırma için sabit parametreler
-SAMPLE_POS  = 3_000   # Pozitif örnek sayısı — ikisi için de aynı, adil karşılaştırma
-NEG_RATIO   = 3       # Negatif oranı — ikisi için de aynı
-RANDOM_SEED = 42      # Tekrar üretilebilirlik
 
 
-def train_and_eval(pos_df, neg_df, terms_df, items_df, label):
-    """
-    Verilen pozitif + negatif örneklerle bir LightGBM modeli eğitir ve
-    5-Fold CV ile Macro-F1 skorunu ölçer.
+DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
+DEFAULT_OUTPUT = os.path.join(PROJECT_ROOT, "outputs", "hard_neg_comparison.csv")
+RANDOM_SEED = 42
+NEGATIVE_RATIO = 3
+LGBM_PARAMS = {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "learning_rate": 0.04,
+    "num_leaves": 63,
+    "min_child_samples": 100,
+    "feature_fraction": 0.85,
+    "bagging_fraction": 0.85,
+    "bagging_freq": 1,
+    "reg_alpha": 0.2,
+    "reg_lambda": 1.5,
+    "deterministic": True,
+    "force_col_wise": True,
+    "seed": RANDOM_SEED,
+    "num_threads": -1,
+    "verbosity": -1,
+}
 
-    Parametreler
-    ----------
-    pos_df : pd.DataFrame
-        Pozitif çiftler (label=1). training_pairs.csv'den gelir.
-    neg_df : pd.DataFrame
-        Negatif çiftler (label=0). Random veya BM25 negatifler.
-    terms_df, items_df : pd.DataFrame
-        Sorgu ve ürün verileri (merge için).
-    label : str
-        Bu deneyin adı — "Random" veya "BM25 Hard" gibi.
 
-    Döndürür
-    -------
-    dict
-        Deney sonuçları: mean_f1, std_f1, best_threshold, best_f1
-    """
-    print(f"\n" + "-"*55)
-    print(f"  Strateji: {label}")
-    print("-"*55)
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Leakage-free BM25 versus random-negative comparison"
+    )
+    parser.add_argument("--bm25", required=True, help="BM25 negative-pair CSV")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--sample-terms", type=int, default=200)
+    mode.add_argument("--all-terms", action="store_true")
+    parser.add_argument("--num-boost-round", type=int, default=500)
+    parser.add_argument("--early-stopping-rounds", type=int, default=50)
+    parser.add_argument("--output", default=DEFAULT_OUTPUT)
+    return parser.parse_args(argv)
 
-    # Pozitif ve negatif örnekleri birleştir, karıştır
-    pos_df = pos_df[["term_id", "item_id"]].copy()
-    pos_df["label"] = 1
-    neg_df = neg_df[["term_id", "item_id"]].copy()
-    neg_df["label"] = 0
 
-    full_df = pd.concat([pos_df, neg_df], ignore_index=True)
-    full_df = full_df.sample(frac=1.0, random_state=RANDOM_SEED).reset_index(drop=True)
-
-    print(f"  Pozitif: {(full_df['label']==1).sum():,}  |  Negatif: {(full_df['label']==0).sum():,}  |  Toplam: {len(full_df):,}")
-
-    # Sorgu ve ürün bilgilerini merge et
-    print("  Merge ve feature hesaplaniyor...")
-    merged = full_df.merge(terms_df, on="term_id", how="left")
-    merged = merged.merge(items_df,  on="item_id",  how="left")
-    merged = build_features(merged)
-
-    X = merged[FEATURE_COLS]
-    y = merged["label"]
-
-    # LightGBM hiperparametreleri — her iki strateji için aynı (adil karşılaştırma)
-    lgbm_params = {
-        "objective"        : "binary",
-        "metric"           : "binary_logloss",
-        "learning_rate"    : 0.05,
-        "num_leaves"       : 31,
-        "min_child_samples": 20,
-        "subsample"        : 0.8,
-        "colsample_bytree" : 0.8,
-        "verbose"          : -1,
-        "random_state"     : RANDOM_SEED,
-    }
-
-    # Grouped validation keeps each query entirely in one fold.
-    skf         = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
-    fold_scores = []
-    oof_preds   = np.zeros(len(X))
-
-    print("  5-Fold CV basliyor...")
-    for fold, (tr_idx, val_idx) in enumerate(
-        skf.split(X, y, groups=merged["term_id"]), start=1
-    ):
-        X_tr, X_val = X.iloc[tr_idx], X.iloc[val_idx]
-        y_tr, y_val = y.iloc[tr_idx], y.iloc[val_idx]
-
-        dtrain = lgb.Dataset(X_tr, label=y_tr)
-        dval   = lgb.Dataset(X_val, label=y_val)
-
+def train_and_evaluate(
+    positives,
+    negatives,
+    terms,
+    items,
+    strategy,
+    num_boost_round,
+    early_stopping_rounds,
+):
+    """Train one strategy and evaluate fold-external threshold selection."""
+    positive_pairs = positives[["term_id", "item_id"]].copy()
+    positive_pairs["label"] = 1
+    negative_pairs = negatives[["term_id", "item_id"]].copy()
+    negative_pairs["label"] = 0
+    pairs = pd.concat([positive_pairs, negative_pairs], ignore_index=True)
+    if pairs.duplicated(["term_id", "item_id"]).any():
+        raise ValueError(f"{strategy} contains duplicate term-item pairs")
+    pairs = pairs.sample(frac=1.0, random_state=RANDOM_SEED).reset_index(drop=True)
+    frame = pairs.merge(
+        terms, on="term_id", how="left", validate="many_to_one"
+    ).merge(items, on="item_id", how="left", validate="many_to_one")
+    frame = build_features(frame, copy=False)
+    X = frame[FEATURE_COLS].astype("float32")
+    y = frame["label"].to_numpy(dtype=np.int8)
+    fold_ids = build_group_fold_ids(y, frame["term_id"].to_numpy())
+    oof = np.zeros(len(frame), dtype=np.float32)
+    iterations = []
+    started = time.monotonic()
+    for fold in np.unique(fold_ids):
+        train_index = np.flatnonzero(fold_ids != fold)
+        validation_index = np.flatnonzero(fold_ids == fold)
+        train_data = lgb.Dataset(X.iloc[train_index], label=y[train_index])
+        validation_data = lgb.Dataset(
+            X.iloc[validation_index],
+            label=y[validation_index],
+            reference=train_data,
+        )
         model = lgb.train(
-            lgbm_params, dtrain,
-            num_boost_round=500,
-            valid_sets=[dval],
+            LGBM_PARAMS,
+            train_data,
+            num_boost_round=num_boost_round,
+            valid_sets=[validation_data],
             callbacks=[
-                lgb.early_stopping(30, verbose=False),
-                lgb.log_evaluation(period=-1),
-            ]
+                lgb.early_stopping(early_stopping_rounds, verbose=False),
+                lgb.log_evaluation(period=0),
+            ],
         )
-
-        val_proba = model.predict(X_val)
-        oof_preds[val_idx] = val_proba
-
-        fold_f1 = macro_f1_from_proba(y_val, val_proba, threshold=0.5)
-        fold_scores.append(fold_f1)
-        print(f"    Fold {fold}/5  Macro-F1: {fold_f1:.4f}  best_iter: {model.best_iteration}")
-
-    mean_f1 = np.mean(fold_scores)
-    std_f1  = np.std(fold_scores)
-
-    # Threshold optimizasyonu
-    best_thresh, best_f1, _ = find_best_threshold(y.values, oof_preds)
-
-    print(f"\n  Ort. Macro-F1 : {mean_f1:.4f} +/- {std_f1:.4f}")
-    print(f"  En iyi thresh : {best_thresh} -> {best_f1:.4f}")
-
+        oof[validation_index] = model.predict(
+            X.iloc[validation_index], num_iteration=model.best_iteration
+        )
+        iterations.append(model.best_iteration)
+    evaluation = cross_fitted_threshold_evaluation(y, oof, fold_ids)
     return {
-        "strateji"      : label,
-        "n_pos"         : int((full_df["label"] == 1).sum()),
-        "n_neg"         : int((full_df["label"] == 0).sum()),
-        "mean_f1"       : round(mean_f1, 4),
-        "std_f1"        : round(std_f1, 4),
-        "best_threshold": best_thresh,
-        "best_f1"       : round(best_f1, 4),
+        "strategy": strategy,
+        "terms": int(frame["term_id"].nunique()),
+        "positive_rows": int((y == 1).sum()),
+        "negative_rows": int((y == 0).sum()),
+        "cross_fitted_macro_f1": evaluation["cross_fitted_macro_f1"],
+        "fold_macro_f1_mean": evaluation["fold_macro_f1_mean"],
+        "fold_macro_f1_std": evaluation["fold_macro_f1_std"],
+        "deploy_threshold": evaluation["deploy_threshold"],
+        "all_oof_selection_macro_f1": evaluation["all_oof_selection_macro_f1"],
+        "mean_best_iteration": float(np.mean(iterations)),
+        "training_seconds": time.monotonic() - started,
     }
 
 
-def main(bm25_path=None):
-    print("=" * 55)
-    print("  G.G.A - Hard Negative vs Random Negative Kiyasi")
-    print("  7 Temmuz 2026 - Omer Faruk Kara")
-    print("=" * 55)
+def _load_bm25_negatives(path, selected, positive_reference):
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"BM25 negative file not found: {path}")
+    negatives = pd.read_csv(
+        path, usecols=["term_id", "item_id"], dtype="string"
+    ).drop_duplicates(["term_id", "item_id"])
+    negatives = negatives[negatives["term_id"].isin(selected["term_id"].unique())]
+    if not verify_no_leakage(negatives, positive_reference):
+        raise ValueError("BM25 negatives overlap known positive pairs")
 
-    # ─── 1. Veri yükle ───────────────────────────────────────────────────────
-    print("\n[1/4] Veri yukleniyor...")
-    terms_df = load_terms(os.path.join(DATA_DIR, "terms.csv"))
-    items_df  = load_items(os.path.join(DATA_DIR, "items.csv"))
-    train_raw = pd.read_csv(
-        os.path.join(DATA_DIR, "training_pairs.csv"),
-        dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
-    )
-
-    # Adil karşılaştırma için: her iki deneyde de aynı pozitif örnekler kullan
-    pos_sample = train_raw.sample(n=SAMPLE_POS, random_state=RANDOM_SEED)
-    print(f"  {SAMPLE_POS:,} pozitif ornek secildi (seed={RANDOM_SEED})")
-
-    results = []
-
-    # ─── 2. Random Negative Deneyi ───────────────────────────────────────────
-    print("\n[2/4] Random Negative uretiliyor...")
-    random_full = build_training_set(
-        pos_sample, items_df,
-        ratio=NEG_RATIO, random_state=RANDOM_SEED, verbose=False,
-        positive_reference_df=train_raw,
-    )
-    # Sadece negatif örnekleri al
-    random_neg = random_full[random_full["label"] == 0].copy()
-    print(f"  {len(random_neg):,} random negatif ornek hazirlandi.")
-
-    result_random = train_and_eval(pos_sample, random_neg, terms_df, items_df, "Random Negative")
-    results.append(result_random)
-
-    # ─── 3. BM25 Hard Negative Deneyi (varsa) ────────────────────────────────
-    if bm25_path and os.path.exists(bm25_path):
-        print(f"\n[3/4] BM25 Hard Negative yukleniyor: {bm25_path}")
-        bm25_neg = pd.read_csv(
-            bm25_path,
-            dtype={"term_id": "string", "item_id": "string"}
+    quota = selected.groupby("term_id", observed=True).size() * NEGATIVE_RATIO
+    groups = []
+    missing = {}
+    for term_id, required in quota.items():
+        candidates = negatives[negatives["term_id"] == term_id]
+        if len(candidates) < required:
+            missing[str(term_id)] = int(required - len(candidates))
+            continue
+        groups.append(
+            candidates.sample(n=int(required), random_state=RANDOM_SEED)
         )
-        bm25_neg = bm25_neg[
-            bm25_neg["term_id"].isin(pos_sample["term_id"])
-        ].drop_duplicates(["term_id", "item_id"])
+    if missing:
+        raise ValueError(
+            "BM25 input does not satisfy per-term quotas; first deficits: "
+            f"{dict(list(missing.items())[:10])}"
+        )
+    return pd.concat(groups, ignore_index=True)
 
-        # Sızıntı kontrolü — BM25 negatifleri asla pozitif olmamalı
-        print("  Sizinti kontrolu yapiliyor...")
-        ok = verify_no_leakage(bm25_neg, train_raw)
-        if not ok:
-            print("  [UYARI] Sizinti var! BM25 negatifleri pozitiflerle cakisiyor.")
-            print("  Cakisan cifter filtreleniyor...")
-            pos_pairs = set(zip(train_raw["term_id"], train_raw["item_id"]))
-            mask = ~bm25_neg.apply(lambda r: (r["term_id"], r["item_id"]) in pos_pairs, axis=1)
-            bm25_neg = bm25_neg[mask].copy()
 
-        # BM25 negatiflerini her term icin ayni orana getir.
-        needed_by_term = pos_sample.groupby("term_id").size().mul(NEG_RATIO)
-        sampled_groups = []
-        missing = {}
-        for term_id, needed in needed_by_term.items():
-            candidates = bm25_neg[bm25_neg["term_id"] == term_id]
-            if len(candidates) < needed:
-                missing[str(term_id)] = int(needed - len(candidates))
-                continue
-            sampled_groups.append(
-                candidates.sample(n=int(needed), random_state=RANDOM_SEED)
-            )
-        if missing:
-            raise ValueError(
-                "BM25 input does not satisfy the per-term comparison quota: "
-                f"{dict(list(missing.items())[:5])}"
-            )
-        bm25_neg = pd.concat(sampled_groups, ignore_index=True)
-        print(f"  {len(bm25_neg):,} BM25 hard negatif ornek hazirlandi.")
+def _atomic_write_frame(frame, path):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    frame.to_csv(temporary_path, index=False)
+    os.replace(temporary_path, path)
 
-        result_bm25 = train_and_eval(pos_sample, bm25_neg, terms_df, items_df, "BM25 Hard Negative")
-        results.append(result_bm25)
-    else:
-        print("\n[3/4] BM25 Hard Negative henuz hazir degil.")
-        if bm25_path:
-            print(f"  Dosya bulunamadi: {bm25_path}")
-        print("  Mert'in negative_bm25_v1 dosyasini bekle,")
-        print("  sonra: python run_hard_neg_comparison.py --bm25 <dosya_yolu>")
 
-    # ─── 4. Karşılaştırma Tablosu ────────────────────────────────────────────
-    print("\n[4/4] Karsilastirma Sonuclari:")
-    print("=" * 55)
-    results_df = pd.DataFrame(results)
-    print(results_df[[
-        "strateji", "n_pos", "n_neg", "mean_f1", "std_f1", "best_threshold", "best_f1"
-    ]].to_string(index=False))
-
-    if len(results) >= 2:
-        # Farkı hesapla ve yorumla
-        r_f1    = results[0]["best_f1"]
-        bm25_f1 = results[1]["best_f1"]
-        diff    = bm25_f1 - r_f1
-        etki    = 'Pozitif etki!' if diff > 0 else 'Negatif etki - random daha iyi?'
-        sonuc   = 'BM25 kullanilmali' if diff > 0.002 else 'Fark kucuk, daha fazla veri gerekebilir'
-        print(f"\n  BM25 kazanimi: {diff:+.4f}  ({etki})")
-        print(f"  Sonuc: {sonuc}")
-
-    # Sonuçları kaydet
-    out_csv = os.path.join(OUTPUT_DIR, "hard_neg_comparison.csv")
-    results_df.to_csv(out_csv, index=False)
-    print(f"\n  Sonuclar kaydedildi: {out_csv}")
-    print("=" * 55)
+def main(argv=None):
+    args = parse_args(argv)
+    if args.sample_terms is not None and args.sample_terms < 5:
+        raise ValueError("--sample-terms must be at least 5")
+    if args.num_boost_round <= 0 or args.early_stopping_rounds <= 0:
+        raise ValueError("boosting and early-stopping rounds must be positive")
+    terms = load_terms(os.path.join(DATA_DIR, "terms.csv"))
+    items = load_items(os.path.join(DATA_DIR, "items.csv"))
+    positives = pd.read_csv(
+        os.path.join(DATA_DIR, "training_pairs.csv"),
+        dtype={
+            "id": "string",
+            "term_id": "string",
+            "item_id": "string",
+            "label": "int8",
+        },
+    )
+    selected = (
+        positives
+        if args.all_terms
+        else sample_complete_terms(
+            positives, args.sample_terms, random_state=RANDOM_SEED
+        )
+    )
+    random_pairs = build_training_set(
+        selected,
+        items,
+        ratio=NEGATIVE_RATIO,
+        random_state=RANDOM_SEED,
+        verbose=False,
+        positive_reference_df=positives,
+    )
+    random_negatives = random_pairs[random_pairs["label"] == 0]
+    bm25_negatives = _load_bm25_negatives(args.bm25, selected, positives)
+    results = pd.DataFrame(
+        [
+            train_and_evaluate(
+                selected,
+                random_negatives,
+                terms,
+                items,
+                "random",
+                args.num_boost_round,
+                args.early_stopping_rounds,
+            ),
+            train_and_evaluate(
+                selected,
+                bm25_negatives,
+                terms,
+                items,
+                "bm25",
+                args.num_boost_round,
+                args.early_stopping_rounds,
+            ),
+        ]
+    )
+    _atomic_write_frame(results, args.output)
+    print(results.to_string(index=False))
+    delta = (
+        results.loc[results["strategy"] == "bm25", "cross_fitted_macro_f1"].iloc[0]
+        - results.loc[
+            results["strategy"] == "random", "cross_fitted_macro_f1"
+        ].iloc[0]
+    )
+    print(f"cross_fitted_bm25_delta={delta:+.6f}\ncomparison={args.output}")
+    return args.output
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Hard Negative vs Random Negative karsilastirmasi")
-    parser.add_argument(
-        "--bm25",
-        type=str,
-        default=None,
-        help="BM25 hard negative CSV dosyasinin yolu (Mert'in ciktisi)"
-    )
-    args = parser.parse_args()
-    main(bm25_path=args.bm25)
+    main()

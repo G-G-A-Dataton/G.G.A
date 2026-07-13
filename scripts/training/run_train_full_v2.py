@@ -103,7 +103,19 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def git_revision():
+def git_revision(require_clean=True):
+    if require_clean:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if status.stdout.strip():
+            raise RuntimeError(
+                "Refusing to create versioned model artifacts from a dirty worktree"
+            )
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=PROJECT_ROOT,

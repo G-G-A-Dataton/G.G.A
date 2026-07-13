@@ -14,6 +14,11 @@
     "n_splits": 5,
     "threshold_selection": "cross_fitted"
   },
+  "model_selection": {
+    "candidates": ["lightgbm", "xgboost", "weighted_blend"],
+    "selection_metric": "cross_fitted_macro_f1",
+    "default_pipeline": "shortlist"
+  },
   "features": {
     "feature_schema_version": 3,
     "context_feature_schema_version": 1,

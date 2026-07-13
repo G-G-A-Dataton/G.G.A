@@ -1,287 +1,259 @@
-"""
-run_deney_matrisi_v2.py
-=======================
-G.G.A Takımı — Negatif Oran + Feature Kombinasyon Deney Matrisi (11 Temmuz Görevi)
+"""Run grouped negative-ratio and feature-set ablation experiments."""
 
-Ömer Faruk Kara tarafından hazırlanmıştır.
-
-Bu script iki eksende kontrollü deneyler yapar:
-
-  1. NEGATİF ORAN ekseni: 1:1, 2:1, 3:1, 5:1
-     Soru: Kaç negatif örnek en iyi F1'i veriyor?
-
-  2. FEATURE KOMBİNASYONU ekseni:
-     A) Temel 7 feature (3 Temmuz)
-     B) Temel + TF-IDF (EXP-003 konfigürasyonu)
-     C) Temel + L2/L3/depth (6 Temmuz)
-     D) Tüm 15 feature (mevcut tam set)
-
-  Toplam: 4 oran × 4 feature seti = 16 deney
-
-Çalıştırmak için:
-  python run_deney_matrisi_v2.py
-"""
-
+import argparse
+import itertools
 import os
 import sys
-import itertools
-import warnings
 import time
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.data              import load_terms, load_items
-from src.features          import build_features, FEATURE_COLS
+from src.candidate_sampling import sample_complete_terms
+from src.data import load_items, load_terms
+from src.features import FEATURE_COLS, build_features
+from src.modeling import build_group_fold_ids, cross_fitted_threshold_evaluation
 from src.negative_sampling import build_training_set
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
-import lightgbm as lgb
+from src.tfidf_features import add_tfidf_features, build_tfidf_vectorizer
 
-DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-DOCS_DIR   = os.path.join(PROJECT_ROOT, "docs")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-SAMPLE_POS  = 2_000   # Hız için küçük tutuldu — 4×4=16 deney
+DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
+DEFAULT_OUTPUT = os.path.join(PROJECT_ROOT, "outputs", "experiment_matrix_v2.csv")
+DEFAULT_REPORT = os.path.join(PROJECT_ROOT, "docs", "experiment_matrix_v2.md")
 RANDOM_SEED = 42
 
-# Denenecek negatif oranlar
-NEG_RATIOS = [1, 2, 3, 5]
-
-# Denenecek feature setleri
+LEXICAL_CORE = [
+    "query_title_overlap",
+    "query_title_coverage",
+    "query_title_precision",
+    "query_title_phrase",
+    "query_category_overlap",
+    "query_category_coverage",
+    "query_brand_match",
+]
 FEATURE_SETS = {
-    "A_temel7": [
-        "query_title_overlap", "query_category_overlap", "query_brand_match",
-        "query_cat_l1_overlap", "title_len", "query_len", "gender_match",
-    ],
-    "B_tfidf": [
-        "query_title_overlap", "query_category_overlap", "query_brand_match",
-        "query_cat_l1_overlap", "title_len", "query_len", "gender_match",
+    "lexical_core": LEXICAL_CORE,
+    "lexical_tfidf": [
+        *LEXICAL_CORE,
+        "query_model_token_match",
+        "query_model_token_conflict",
         "tfidf_cosine",
     ],
-    "C_kategori": [
-        "query_title_overlap", "query_category_overlap", "query_brand_match",
-        "query_cat_l1_overlap", "title_len", "query_len", "gender_match",
-        "age_group_match", "demographic_conflict",
-        "query_cat_l2_overlap", "query_cat_l3_overlap", "cat_depth",
+    "structured": [
+        *LEXICAL_CORE,
+        "query_cat_l1_overlap",
+        "query_cat_l2_overlap",
+        "query_cat_l3_overlap",
+        "cat_depth",
+        "gender_match",
+        "age_group_match",
+        "demographic_conflict",
+        "query_color_match",
+        "query_size_match",
+        "query_material_match",
     ],
-    "D_tam15": FEATURE_COLS,  # Tüm 15 feature
+    "full": [*FEATURE_COLS, "tfidf_cosine"],
 }
-
-# LightGBM parametreleri — 8 Temmuz tuning'den en iyi kombinasyon
 LGBM_PARAMS = {
-    "objective"        : "binary",
-    "metric"           : "binary_logloss",
-    "num_leaves"       : 31,
-    "learning_rate"    : 0.05,
-    "min_child_samples": 20,
-    "subsample"        : 0.8,
-    "colsample_bytree" : 0.8,
-    "verbose"          : -1,
-    "random_state"     : RANDOM_SEED,
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "learning_rate": 0.04,
+    "num_leaves": 63,
+    "min_child_samples": 100,
+    "feature_fraction": 0.85,
+    "bagging_fraction": 0.85,
+    "bagging_freq": 1,
+    "reg_alpha": 0.2,
+    "reg_lambda": 1.5,
+    "deterministic": True,
+    "force_col_wise": True,
+    "seed": RANDOM_SEED,
+    "num_threads": -1,
+    "verbosity": -1,
 }
 
 
-def run_single(X, y, groups, feature_names):
-    """
-    Verilen feature seti üzerinde 5-Fold CV yaparak Macro-F1 döndürür.
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Grouped feature and negative-ratio ablation matrix"
+    )
+    parser.add_argument("--sample-terms", type=int, default=100)
+    parser.add_argument("--ratios", nargs="+", type=int, default=[1, 2, 3, 5])
+    parser.add_argument("--num-boost-round", type=int, default=500)
+    parser.add_argument("--early-stopping-rounds", type=int, default=50)
+    parser.add_argument("--output", default=DEFAULT_OUTPUT)
+    parser.add_argument("--report", default=DEFAULT_REPORT)
+    return parser.parse_args(argv)
 
-    Parametreler
-    ----------
-    X : pd.DataFrame  — tüm feature matrisi (FEATURE_COLS sırasında)
-    y : pd.Series     — etiketler
-    feature_names : list of str  — bu deneyde kullanılacak feature'lar
 
-    Döndürür
-    -------
-    dict  — mean_f1, std_f1, best_threshold, best_f1, train_sec
-    """
-    # Sadece bu deneyin feature'larını seç
-    # tfidf_cosine gibi bazı feature'lar X'te olmayabilir — eksikleri filtrele
-    available = [f for f in feature_names if f in X.columns]
-    X_sub = X[available]
-
-    skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
-    scores    = []
-    oof_preds = np.zeros(len(X_sub))
-    t0        = time.time()
-
-    for fold, (tr_idx, val_idx) in enumerate(
-        skf.split(X_sub, y, groups=groups), start=1
-    ):
-        dtrain = lgb.Dataset(X_sub.iloc[tr_idx], label=y.iloc[tr_idx])
-        dval   = lgb.Dataset(X_sub.iloc[val_idx], label=y.iloc[val_idx])
-
-        model = lgb.train(
-            LGBM_PARAMS, dtrain,
-            num_boost_round=500,
-            valid_sets=[dval],
-            callbacks=[
-                lgb.early_stopping(30, verbose=False),
-                lgb.log_evaluation(period=-1),
-            ]
+def run_single(frame, feature_names, num_boost_round, early_stopping_rounds):
+    """Train grouped OOF folds and report cross-fitted threshold performance."""
+    missing = sorted(set(feature_names) - set(frame.columns))
+    if missing:
+        raise ValueError(f"experiment feature set is missing columns: {missing}")
+    X = frame[feature_names].astype("float32")
+    y = frame["label"].to_numpy(dtype=np.int8)
+    fold_ids = build_group_fold_ids(y, frame["term_id"].to_numpy())
+    oof = np.zeros(len(frame), dtype=np.float32)
+    best_iterations = []
+    started = time.monotonic()
+    for fold in np.unique(fold_ids):
+        train_index = np.flatnonzero(fold_ids != fold)
+        validation_index = np.flatnonzero(fold_ids == fold)
+        train_data = lgb.Dataset(X.iloc[train_index], label=y[train_index])
+        validation_data = lgb.Dataset(
+            X.iloc[validation_index],
+            label=y[validation_index],
+            reference=train_data,
         )
-        val_proba = model.predict(X_sub.iloc[val_idx])
-        oof_preds[val_idx] = val_proba
-        scores.append(macro_f1_from_proba(y.iloc[val_idx], val_proba, threshold=0.5))
-
-    elapsed = time.time() - t0
-    mean_f1 = float(np.mean(scores))
-    std_f1  = float(np.std(scores))
-    best_thresh, best_f1, _ = find_best_threshold(y.values, oof_preds)
-
+        model = lgb.train(
+            LGBM_PARAMS,
+            train_data,
+            num_boost_round=num_boost_round,
+            valid_sets=[validation_data],
+            callbacks=[
+                lgb.early_stopping(early_stopping_rounds, verbose=False),
+                lgb.log_evaluation(period=0),
+            ],
+        )
+        oof[validation_index] = model.predict(
+            X.iloc[validation_index], num_iteration=model.best_iteration
+        )
+        best_iterations.append(model.best_iteration)
+    evaluation = cross_fitted_threshold_evaluation(y, oof, fold_ids)
     return {
-        "mean_f1"        : round(mean_f1, 4),
-        "std_f1"         : round(std_f1, 4),
-        "best_threshold" : best_thresh,
-        "best_f1"        : round(best_f1, 4),
-        "n_features"     : len(available),
-        "train_sec"      : round(elapsed, 1),
+        "cross_fitted_macro_f1": evaluation["cross_fitted_macro_f1"],
+        "fold_macro_f1_mean": evaluation["fold_macro_f1_mean"],
+        "fold_macro_f1_std": evaluation["fold_macro_f1_std"],
+        "deploy_threshold": evaluation["deploy_threshold"],
+        "all_oof_selection_macro_f1": evaluation["all_oof_selection_macro_f1"],
+        "mean_best_iteration": float(np.mean(best_iterations)),
+        "feature_count": len(feature_names),
+        "training_seconds": time.monotonic() - started,
     }
 
 
-def write_report(results_df, path):
-    """Deney matrisini Markdown tablosu olarak kaydeder."""
+def _prepare_ratio_dataset(selected, positives, terms, items, vectorizer, ratio):
+    pairs = build_training_set(
+        selected,
+        items,
+        ratio=ratio,
+        random_state=RANDOM_SEED,
+        verbose=False,
+        positive_reference_df=positives,
+    )
+    frame = pairs.merge(
+        terms, on="term_id", how="left", validate="many_to_one"
+    ).merge(items, on="item_id", how="left", validate="many_to_one")
+    frame = build_features(frame, copy=False)
+    return add_tfidf_features(frame, vectorizer, copy=False, verbose=False)
+
+
+def _atomic_write_frame(frame, path):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    frame.to_csv(temporary_path, index=False)
+    os.replace(temporary_path, path)
+
+
+def _write_report(results, path, sample_terms):
+    best = results.loc[results["cross_fitted_macro_f1"].idxmax()]
     lines = [
-        "# Deney Matrisi v2 (11 Temmuz)",
+        "# Grouped Experiment Matrix v2",
         "",
-        "**Hazırlayan:** Ömer Faruk Kara  ",
-        "**Tarih:** 11 Temmuz 2026  ",
-        "**Yöntem:** 5-Fold StratifiedGroupKFold, group=term_id, seed=42  ",
-        f"**Pozitif örnek:** {SAMPLE_POS:,}",
+        "This is an ablation study. Production training uses the test-shaped candidate distribution, not a fixed negative ratio.",
         "",
-        "## Eksenler",
+        f"- Complete sampled terms: `{sample_terms:,}`",
+        "- Validation: `StratifiedGroupKFold(group=term_id, n_splits=5, seed=42)`",
+        "- Threshold selection: cross-fitted outside each evaluated fold",
+        f"- Best diagnostic configuration: `{best['feature_set']}` at `{int(best['negative_ratio'])}:1`",
+        f"- Best cross-fitted Macro-F1: `{best['cross_fitted_macro_f1']:.6f}`",
         "",
-        "- **Negatif Oran:** 1:1, 2:1, 3:1, 5:1",
-        "- **Feature Seti:**",
-        "  - A: Temel 7 feature (3 Temmuz)",
-        "  - B: Temel + TF-IDF",
-        "  - C: Temel + Kategori L2/L3/depth",
-        "  - D: Tam 15 feature (mevcut)",
-        "",
-        "---",
-        "",
-        "## Sonuç Matrisi (Best F1)",
-        "",
+        "| Negative ratio | Feature set | Features | Cross-fitted Macro-F1 | Fold std | Deploy threshold | Seconds |",
+        "|---:|---|---:|---:|---:|---:|---:|",
     ]
+    for row in results.itertuples(index=False):
+        lines.append(
+            f"| {row.negative_ratio}:1 | {row.feature_set} | {row.feature_count} | "
+            f"{row.cross_fitted_macro_f1:.6f} | {row.fold_macro_f1_std:.6f} | "
+            f"{row.deploy_threshold:.8f} | {row.training_seconds:.1f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "All-OOF selection scores in the CSV are reproducibility diagnostics, not unbiased validation estimates.",
+            "",
+        ]
+    )
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as report_file:
+        report_file.write("\n".join(lines))
+    os.replace(temporary_path, path)
 
-    # Pivot tablo: satır=oran, sütun=feature seti
-    pivot = results_df.pivot(index="neg_ratio", columns="feature_set", values="best_f1")
-    lines.append("| Neg. Oran | " + " | ".join(pivot.columns) + " |")
-    lines.append("|" + "---|" * (len(pivot.columns) + 1))
-    for ratio, row in pivot.iterrows():
-        vals = " | ".join(f"**{v:.4f}**" if v == pivot.max().max() else f"{v:.4f}" for v in row)
-        lines.append(f"| {ratio}:1 | {vals} |")
 
-    # En iyi kombinasyon
-    best_row = results_df.loc[results_df["best_f1"].idxmax()]
-    lines += [
-        "",
-        "---",
-        "",
-        "## En İyi Kombinasyon",
-        "",
-        f"| Parametre | Değer |",
-        f"|---|---|",
-        f"| Feature seti | {best_row['feature_set']} |",
-        f"| Negatif oran | {best_row['neg_ratio']}:1 |",
-        f"| Best F1 | **{best_row['best_f1']:.4f}** |",
-        f"| Best Threshold | {best_row['best_threshold']} |",
-        f"| Feature sayısı | {int(best_row['n_features'])} |",
-        "",
-        "---",
-        "",
-        "## Ham Sonuclar",
-        "",
-    ]
-    # Manuel markdown tablosu (tabulate gerektirmez)
-    cols = ["neg_ratio", "feature_set", "mean_f1", "std_f1", "best_threshold", "best_f1", "n_features", "train_sec"]
-    lines.append("| " + " | ".join(cols) + " |")
-    lines.append("|" + "---|" * len(cols))
-    for _, row in results_df[cols].iterrows():
-        lines.append("| " + " | ".join(str(row[c]) for c in cols) + " |")
-    lines += [
-        "",
-        f"*CSV: `outputs/deney_matrisi_v2.csv`*"
-    ]
+def main(argv=None):
+    args = parse_args(argv)
+    if args.sample_terms < 5:
+        raise ValueError("--sample-terms must be at least 5")
+    if not args.ratios or any(ratio <= 0 for ratio in args.ratios):
+        raise ValueError("--ratios must contain positive integers")
+    if args.num_boost_round <= 0 or args.early_stopping_rounds <= 0:
+        raise ValueError("boosting and early-stopping rounds must be positive")
 
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    terms = load_terms(os.path.join(DATA_DIR, "terms.csv"))
+    items = load_items(os.path.join(DATA_DIR, "items.csv"))
+    positives = pd.read_csv(
+        os.path.join(DATA_DIR, "training_pairs.csv"),
+        dtype={
+            "id": "string",
+            "term_id": "string",
+            "item_id": "string",
+            "label": "int8",
+        },
+    )
+    selected = sample_complete_terms(
+        positives, args.sample_terms, random_state=RANDOM_SEED
+    )
+    vectorizer = build_tfidf_vectorizer(
+        terms, items, max_features=10_000, ngram_range=(1, 1), min_df=2
+    )
+    datasets = {
+        ratio: _prepare_ratio_dataset(
+            selected, positives, terms, items, vectorizer, ratio
+        )
+        for ratio in sorted(set(args.ratios))
+    }
+
+    rows = []
+    experiments = list(itertools.product(datasets, FEATURE_SETS))
+    for index, (ratio, feature_set) in enumerate(experiments, start=1):
+        print(
+            f"[{index}/{len(experiments)}] ratio={ratio}:1 "
+            f"features={feature_set}"
+        )
+        result = run_single(
+            datasets[ratio],
+            FEATURE_SETS[feature_set],
+            args.num_boost_round,
+            args.early_stopping_rounds,
+        )
+        rows.append(
+            {"negative_ratio": ratio, "feature_set": feature_set, **result}
+        )
+    results = pd.DataFrame(rows).sort_values(
+        ["negative_ratio", "feature_set"]
+    )
+    _atomic_write_frame(results, args.output)
+    _write_report(results, args.report, args.sample_terms)
+    print(f"matrix={args.output}\nreport={args.report}")
+    return args.output
 
 
 if __name__ == "__main__":
-    total_exp = len(NEG_RATIOS) * len(FEATURE_SETS)
-    print("=" * 65)
-    print("  G.G.A - Deney Matrisi v2 (11 Temmuz)")
-    print(f"  {len(NEG_RATIOS)} oran x {len(FEATURE_SETS)} feature seti = {total_exp} deney")
-    print("=" * 65)
-
-    # 1. Veri yükle
-    print("\n[1/3] Veri yukleniyor...")
-    terms_df = load_terms(os.path.join(DATA_DIR, "terms.csv"))
-    items_df  = load_items(os.path.join(DATA_DIR, "items.csv"))
-    train_raw = pd.read_csv(
-        os.path.join(DATA_DIR, "training_pairs.csv"),
-        dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
-    )
-    pos_sample = train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED)
-
-    # 2. Her oran için birleşik feature seti önceden üret (tekrar hesaplamayı önle)
-    print("\n[2/3] Her negatif oran icin egitim seti hazirlaniyor...")
-    datasets = {}
-    for ratio in NEG_RATIOS:
-        print(f"  Oran {ratio}:1 ...", end=" ", flush=True)
-        full = build_training_set(
-            pos_sample, items_df,
-            ratio=ratio, random_state=RANDOM_SEED, verbose=False,
-            positive_reference_df=train_raw,
-        )
-        merged = full.merge(terms_df, on="term_id", how="left")
-        merged = merged.merge(items_df,  on="item_id",  how="left")
-        merged = build_features(merged)
-        datasets[ratio] = merged
-        print(f"{len(merged):,} satir hazir")
-
-    # 3. Deneyleri çalıştır
-    print("\n[3/3] Deneyler basliyor...\n")
-    results = []
-    exp_num = 0
-
-    for ratio, fs_name in itertools.product(NEG_RATIOS, FEATURE_SETS.keys()):
-        exp_num += 1
-        fs_cols = FEATURE_SETS[fs_name]
-        merged  = datasets[ratio]
-        X = merged[[c for c in FEATURE_COLS if c in merged.columns]]
-        y = merged["label"]
-
-        print(f"  [{exp_num:02d}/{total_exp}] oran={ratio}:1, features={fs_name} ...", end=" ", flush=True)
-        result = run_single(X, y, merged["term_id"], fs_cols)
-        result.update({"neg_ratio": ratio, "feature_set": fs_name})
-        results.append(result)
-        print(f"mean_F1={result['mean_f1']:.4f}  best={result['best_f1']:.4f}")
-
-    # 4. Sonuçlar
-    results_df = pd.DataFrame(results)
-
-    print("\n" + "=" * 65)
-    print("  DENEY MATRİSİ (Best F1)")
-    print("=" * 65)
-    pivot = results_df.pivot(index="neg_ratio", columns="feature_set", values="best_f1")
-    print(pivot.to_string())
-
-    best = results_df.loc[results_df["best_f1"].idxmax()]
-    print(f"\n  En iyi: oran={best['neg_ratio']}:1, features={best['feature_set']}, F1={best['best_f1']:.4f}")
-
-    out_csv = os.path.join(OUTPUT_DIR, "deney_matrisi_v2.csv")
-    results_df.to_csv(out_csv, index=False)
-
-    out_md = os.path.join(DOCS_DIR, "deney_matrisi_v2.md")
-    write_report(results_df, out_md)
-
-    print(f"\n  CSV  : {out_csv}")
-    print(f"  Rapor: {out_md}")
-    print("=" * 65)
+    main()
