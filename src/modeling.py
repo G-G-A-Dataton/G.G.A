@@ -8,7 +8,8 @@ from src.features import FEATURE_COLS
 from src.metrics import find_best_threshold, get_stratified_group_kfold, macro_f1
 
 
-MODEL_FEATURE_COLS = FEATURE_COLS + ["tfidf_cosine", *CONTEXT_FEATURE_COLS]
+BASE_MODEL_FEATURE_COLS = FEATURE_COLS + ["tfidf_cosine"]
+MODEL_FEATURE_COLS = [*BASE_MODEL_FEATURE_COLS, *CONTEXT_FEATURE_COLS]
 
 
 def build_group_fold_ids(y, groups, n_splits=5, random_state=42):

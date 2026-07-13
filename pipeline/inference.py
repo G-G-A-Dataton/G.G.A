@@ -22,6 +22,12 @@ from src.context_features import CONTEXT_FEATURE_SCHEMA_VERSION, add_context_fea
 from src.data import load_items, load_terms
 from src.features import FEATURE_SCHEMA_VERSION, build_features
 from src.modeling import MODEL_FEATURE_COLS
+from src.out_of_core_features import (
+    build_base_feature_store,
+    build_context_feature_store,
+    load_feature_batch,
+    remove_feature_stores,
+)
 from src.tfidf_features import add_tfidf_features, load_vectorizer
 from src.validate_submission import EXPECTED_ROWS, validate_submission
 
@@ -317,42 +323,55 @@ def run_prediction_pipeline(args):
                 f"expected {MODEL_FEATURE_COLS}, got {model_features}"
             )
 
-    logger.info("Step 3/5: Generating group-complete features and predictions.")
-    pairs_reader = pd.read_csv(
-        pairs_path,
-        chunksize=args.batch_size,
-        dtype={"id": "string", "term_id": "string", "item_id": "string"},
-    )
+    logger.info("Step 3/5: Building disk-backed global context features.")
     output_path = resolve_output_path(args)
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     temporary_output = output_path + ".tmp"
-    processed_rows = 0
     expected_rows = args.sample or EXPECTED_ROWS
+    store_prefix = os.path.join(
+        OUTPUT_DIR, f".inference_features_{os.getpid()}"
+    )
+    store_paths = []
+    id_reader = None
     try:
-        for source_batch in iter_complete_term_batches(pairs_reader):
+        base_path, codes_path = build_base_feature_store(
+            pairs_path,
+            terms_df,
+            items_df,
+            vectorizer,
+            row_count=expected_rows,
+            batch_size=args.batch_size,
+            output_prefix=store_prefix,
+        )
+        store_paths.extend([base_path, codes_path])
+        context_path = build_context_feature_store(
+            base_path, codes_path, store_prefix
+        )
+        store_paths.append(context_path)
+        base_store = np.load(base_path, mmap_mode="r")
+        context_store = np.load(context_path, mmap_mode="r")
+        id_reader = pd.read_csv(
+            pairs_path,
+            usecols=["id"],
+            dtype={"id": "string"},
+            nrows=expected_rows,
+            chunksize=args.batch_size,
+        )
+        processed_rows = 0
+        for id_batch in id_reader:
             batch_started_at = time.time()
-            batch = source_batch.merge(
-                terms_df, on="term_id", how="left", validate="many_to_one"
-            ).merge(items_df, on="item_id", how="left", validate="many_to_one")
-            if batch[["query", "title"]].isna().any().any():
-                raise ValueError("Submission batch contains unresolved term_id or item_id")
-            batch = build_features(batch, verbose=False, copy=False)
-            batch = add_tfidf_features(
-                batch, vectorizer, verbose=False, copy=False
+            end = processed_rows + len(id_batch)
+            model_batch = load_feature_batch(
+                base_store, context_store, processed_rows, end
             )
-            batch = add_context_features(batch, copy=False)
             probabilities = np.mean(
-                [model.predict(batch[MODEL_FEATURE_COLS]) for model in models], axis=0
+                [model.predict(model_batch) for model in models], axis=0
             )
             predictions = (probabilities >= threshold).astype(np.int8)
-
-            rows_to_write = min(len(source_batch), expected_rows - processed_rows)
-            if rows_to_write <= 0:
-                break
             pd.DataFrame(
                 {
-                    "id": source_batch["id"].iloc[:rows_to_write].to_numpy(),
-                    "prediction": predictions[:rows_to_write],
+                    "id": id_batch["id"].to_numpy(),
+                    "prediction": predictions,
                 }
             ).to_csv(
                 temporary_output,
@@ -360,17 +379,16 @@ def run_prediction_pipeline(args):
                 header=processed_rows == 0,
                 index=False,
             )
-            processed_rows += rows_to_write
+            processed_rows = end
             duration = max(time.time() - batch_started_at, 1e-9)
             logger.info(
                 "Processed: %s / %s (%.1f%%) | %.0f rows/s",
                 f"{processed_rows:,}",
                 f"{expected_rows:,}",
                 min(processed_rows / expected_rows * 100, 100.0),
-                rows_to_write / duration,
+                len(id_batch) / duration,
             )
-            if processed_rows == expected_rows:
-                break
+        id_reader.close()
 
         if processed_rows != expected_rows:
             raise ValueError(
@@ -391,7 +409,9 @@ def run_prediction_pipeline(args):
             os.remove(temporary_output)
         raise
     finally:
-        pairs_reader.close()
+        if id_reader is not None:
+            id_reader.close()
+        remove_feature_stores(*store_paths)
 
     logger.info(
         "Step 5/5: Pipeline completed in %.1f seconds. Output: %s",

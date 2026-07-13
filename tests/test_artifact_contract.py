@@ -229,6 +229,11 @@ class ArtifactContractTests(unittest.TestCase):
                     frame[column] = 0.0
             return frame
 
+        def fake_load_feature_batch(base, context, start, end):
+            return pd.DataFrame(
+                0.0, index=range(end - start), columns=MODEL_FEATURE_COLS
+            )
+
         args = SimpleNamespace(
             batch_size=2,
             sample=3,
@@ -247,6 +252,16 @@ class ArtifactContractTests(unittest.TestCase):
             build_features=mock.Mock(side_effect=fake_build_features),
             add_tfidf_features=mock.Mock(side_effect=fake_add_tfidf),
             add_context_features=mock.Mock(side_effect=fake_add_context),
+            build_base_feature_store=mock.Mock(
+                return_value=("base_features.npy", "term_codes.npy")
+            ),
+            build_context_feature_store=mock.Mock(
+                return_value="context_features.npy"
+            ),
+            load_feature_batch=mock.Mock(side_effect=fake_load_feature_batch),
+            remove_feature_stores=mock.Mock(),
+        ), mock.patch.object(
+            inference.np, "load", side_effect=[object(), object()]
         ), mock.patch.object(inference.lgb, "Booster", return_value=FakeModel()):
             result = inference.run_prediction_pipeline(args)
 

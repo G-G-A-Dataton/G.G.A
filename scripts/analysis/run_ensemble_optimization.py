@@ -1,191 +1,242 @@
-"""
-scripts/analysis/run_ensemble_optimization.py
-=============================================
-G.G.A Takımı — Ensemble Ağırlıklandırma & Ortak Optimizasyon (15 Temmuz Görevi)
+"""Cross-fitted ensemble selection and atomic candidate submission creation."""
 
-Ömer Faruk Kara tarafından hazırlanmıştır.
-
-Bu script:
-  1. Dün dışa aktarılan Out-of-Fold (OOF) ve test tahminlerini (LGBM ve XGB) yükler.
-  2. SciPy minimize (Powell metodu ile, non-differentiable / türevsiz optimizasyon)
-     kullanarak model ağırlıklarını ve karar eşiğini (threshold) AYNI ANDA optimize eder.
-  3. Lokal Macro-F1 skorunu maksimize eden en iyi parametreleri belirler.
-  4. Bu en iyi parametrelerle "Final Aday Model v1" tahminlerini ve Kaggle
-     formatına uygun submission_ensemble_candidate.csv dosyasını üretir.
-
-Çalıştırmak için:
-  python scripts/analysis/run_ensemble_optimization.py
-"""
-
+import argparse
+import json
 import os
 import sys
-import warnings
+
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
-from sklearn.metrics import f1_score
 
-warnings.filterwarnings("ignore")
 
-# Proje kök dizinini sys.path'e ekle
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.validate_submission import validate_submission
+from src.modeling import (
+    cross_fitted_ensemble_evaluation,
+    cross_fitted_threshold_evaluation,
+)
 from src.oof_artifacts import validate_oof_artifacts
+from src.validate_submission import validate_submission
+
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
-ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
-SUB_OUTPUT = os.path.join(OUTPUT_DIR, "submission_ensemble_candidate.csv")
+DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
+DEFAULT_ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
+DEFAULT_OUTPUT = os.path.join(OUTPUT_DIR, "submission_ensemble_candidate.csv")
+DEFAULT_REPORT = os.path.join(PROJECT_ROOT, "docs", "ensemble_karsilastirma.md")
 
 
-def f1_objective(params, oof_lgbm, oof_xgb, y_true):
-    """
-    SciPy optimizasyonu için minimize edilecek negatif Macro-F1 fonksiyonu.
-    
-    params[0] = w_lgbm (LightGBM ağırlığı)
-    params[1] = threshold (karar eşiği)
-    """
-    w_lgbm = params[0]
-    threshold = params[1]
-    
-    # Ağırlık sınırları kontrolü (ceza fonksiyonu olarak)
-    if w_lgbm < 0.0 or w_lgbm > 1.0 or threshold < 0.05 or threshold > 0.95:
-        return 1.0  # F1'in olabilecek en kötü değerinin negatifi (aslında minimize için pozitif)
-        
-    w_xgb = 1.0 - w_lgbm
-    
-    # Ağırlıklı kombinasyon
-    prob_blend = w_lgbm * oof_lgbm + w_xgb * oof_xgb
-    pred_blend = (prob_blend >= threshold).astype(int)
-    
-    # Macro-F1 hesapla
-    score = f1_score(y_true, pred_blend, average="macro", zero_division=0)
-    return -score  # Minimize etmek istediğimiz için negatifi
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Cross-fitted ensemble optimization")
+    parser.add_argument("--artifact-dir", default=DEFAULT_ARTIFACT_DIR)
+    parser.add_argument("--output", default=DEFAULT_OUTPUT)
+    parser.add_argument("--report", default=DEFAULT_REPORT)
+    parser.add_argument("--chunk-size", type=int, default=250_000)
+    parser.add_argument(
+        "--allow-sample",
+        action="store_true",
+        help="Allow sample artifacts for pipeline smoke tests",
+    )
+    return parser.parse_args(argv)
 
 
-def main():
-    print("=" * 65)
-    print("  G.G.A — Ensemble Agirliklandirma & Ortak Optimizasyon")
-    print("  15 Temmuz 2026 — Omer Faruk Kara")
-    print("=" * 65)
+def _load_array(artifact_dir, filename):
+    values = np.load(os.path.join(artifact_dir, filename), mmap_mode="r")
+    if values.ndim != 1 or not np.isfinite(values).all():
+        raise ValueError(f"{filename} must be a finite one-dimensional array")
+    return values
 
-    # 1. Tahminleri Yükle
-    print("\n[1/4] Tahmin dosyaları yukleniyor...")
-    manifest = validate_oof_artifacts(ARTIFACT_DIR, require_full=True)
-    paths = {
-        "oof_lgbm"  : os.path.join(ARTIFACT_DIR, "oof_lgbm.npy"),
-        "test_lgbm" : os.path.join(ARTIFACT_DIR, "test_lgbm.npy"),
-        "oof_xgb"   : os.path.join(ARTIFACT_DIR, "oof_xgb.npy"),
-        "test_xgb"  : os.path.join(ARTIFACT_DIR, "test_xgb.npy"),
-        "y_true"    : os.path.join(ARTIFACT_DIR, "y_true.npy"),
-        "metadata"  : os.path.join(ARTIFACT_DIR, "test_metadata.csv")
+
+def _atomic_write_json(path, payload):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as output_file:
+        json.dump(payload, output_file, ensure_ascii=False, indent=2)
+        output_file.write("\n")
+    os.replace(temporary_path, path)
+
+
+def _write_report(
+    path, lgb_report, xgb_report, blend_report, selected_model, deploy, positive_rate
+):
+    lines = [
+        "# Ensemble Model Selection Report",
+        "",
+        "This report separates held-out model-selection performance from deploy parameters.",
+        "",
+        "| Candidate | Cross-fitted Macro-F1 |",
+        "|---|---:|",
+        f"| LightGBM | {lgb_report['cross_fitted_macro_f1']:.6f} |",
+        f"| XGBoost | {xgb_report['cross_fitted_macro_f1']:.6f} |",
+        f"| Weighted blend | {blend_report['cross_fitted_macro_f1']:.6f} |",
+        "",
+        "## Deploy Parameters",
+        "",
+        f"- Selected candidate: `{selected_model}`",
+        f"- LightGBM weight: `{deploy['lightgbm_weight']:.4f}`",
+        f"- XGBoost weight: `{deploy['xgboost_weight']:.4f}`",
+        f"- Threshold: `{deploy['threshold']:.8f}`",
+        f"- Candidate positive rate: `{positive_rate:.4%}`",
+        "",
+        "The all-OOF selection score is recorded for reproducibility only; it is not an unbiased validation estimate.",
+        "",
+    ]
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as report_file:
+        report_file.write("\n".join(lines))
+    os.replace(temporary_path, path)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.chunk_size <= 0:
+        raise ValueError("--chunk-size must be positive")
+    manifest = validate_oof_artifacts(
+        args.artifact_dir, require_full=not args.allow_sample
+    )
+    arrays = {
+        filename: _load_array(args.artifact_dir, filename)
+        for filename in (
+            "oof_lgbm.npy",
+            "test_lgbm.npy",
+            "oof_xgb.npy",
+            "test_xgb.npy",
+            "y_true.npy",
+            "fold_ids.npy",
+        )
     }
-
-    missing = [k for k, p in paths.items() if not os.path.exists(p)]
-    if missing:
-        print("  [HATA] Aşağıdaki dosyalar bulunamadı:")
-        for m in missing:
-            print(f"    - {paths[m]}")
-        print("\n  Lütfen önce shortlist scriptini çalıştırın:")
-        print("  python scripts/training/run_model_shortlist.py")
-        sys.exit(1)
-
-    oof_lgbm = np.load(paths["oof_lgbm"])
-    test_lgbm = np.load(paths["test_lgbm"])
-    oof_xgb = np.load(paths["oof_xgb"])
-    test_xgb = np.load(paths["test_xgb"])
-    y_true = np.load(paths["y_true"])
-    sub_df = pd.read_csv(paths["metadata"], dtype={"id": "string", "term_id": "string", "item_id": "string"})
+    training_rows = manifest["training"]["rows"]
+    test_rows = manifest["test_rows"]
     if any(
-        len(values) != manifest["training_rows"]
-        for values in (oof_lgbm, oof_xgb, y_true)
+        len(arrays[name]) != training_rows
+        for name in ("oof_lgbm.npy", "oof_xgb.npy", "y_true.npy", "fold_ids.npy")
     ) or any(
-        len(values) != manifest["test_rows"]
-        for values in (test_lgbm, test_xgb, sub_df)
+        len(arrays[name]) != test_rows
+        for name in ("test_lgbm.npy", "test_xgb.npy")
     ):
-        raise ValueError("OOF array lengths do not match the artifact manifest")
+        raise ValueError("Prediction array lengths do not match the OOF manifest")
 
-    print(f"  LightGBM OOF Boyutu: {oof_lgbm.shape}")
-    print(f"  XGBoost OOF Boyutu  : {oof_xgb.shape}")
-    print(f"  True Label Boyutu   : {y_true.shape}")
-
-    # Tekil model başarılarını yazdır
-    f1_lgb_init = f1_score(y_true, (oof_lgbm >= 0.5).astype(int), average="macro")
-    f1_xgb_init = f1_score(y_true, (oof_xgb >= 0.5).astype(int), average="macro")
-    print(f"\n  Tekil Model Başarıları (Threshold = 0.50):")
-    print(f"    - LightGBM F1: {f1_lgb_init:.4f}")
-    print(f"    - XGBoost  F1: {f1_xgb_init:.4f}")
-
-    # 2. Ortak Optimizasyon (SciPy)
-    print("\n[2/4] SciPy ile ortak optimizasyon baslatiliyor...")
-    
-    # Başlangıç tahmin değerleri: w_lgbm=0.5, threshold=0.5
-    initial_guess = [0.5, 0.5]
-    
-    # Sınırlar (Bounds): w_lgbm in [0, 1], threshold in [0.05, 0.95]
-    bounds = [(0.0, 1.0), (0.05, 0.95)]
-
-    # F1 gibi türevsiz ve süreksiz fonksiyonlar için Powell veya Nelder-Mead en iyisidir
-    res = minimize(
-        f1_objective,
-        initial_guess,
-        args=(oof_lgbm, oof_xgb, y_true),
-        method="Powell",
-        bounds=bounds,
-        options={"xtol": 1e-4, "ftol": 1e-4, "disp": False}
+    y_true = arrays["y_true.npy"]
+    fold_ids = arrays["fold_ids.npy"]
+    lgb_report = cross_fitted_threshold_evaluation(
+        y_true, arrays["oof_lgbm.npy"], fold_ids
+    )
+    xgb_report = cross_fitted_threshold_evaluation(
+        y_true, arrays["oof_xgb.npy"], fold_ids
+    )
+    blend_report = cross_fitted_ensemble_evaluation(
+        y_true,
+        arrays["oof_lgbm.npy"],
+        arrays["oof_xgb.npy"],
+        fold_ids,
+    )
+    candidates = {
+        "lightgbm": (
+            lgb_report["cross_fitted_macro_f1"],
+            1.0,
+            lgb_report["deploy_threshold"],
+        ),
+        "xgboost": (
+            xgb_report["cross_fitted_macro_f1"],
+            0.0,
+            xgb_report["deploy_threshold"],
+        ),
+        "weighted_blend": (
+            blend_report["cross_fitted_macro_f1"],
+            blend_report["deploy_first_model_weight"],
+            blend_report["deploy_threshold"],
+        ),
+    }
+    selected_model, (_, weight, threshold) = max(
+        candidates.items(), key=lambda item: (item[1][0], item[0] == "weighted_blend")
     )
 
-    best_w_lgbm = float(res.x[0])
-    best_w_xgb = 1.0 - best_w_lgbm
-    best_threshold = float(res.x[1])
-    best_f1 = -float(res.fun)
-
-    print("\n  Optimizasyon Tamamlandı:")
-    print(f"    - En İyi LightGBM Ağırlığı: {best_w_lgbm:.4f}")
-    print(f"    - En İyi XGBoost Ağırlığı : {best_w_xgb:.4f}")
-    print(f"    - En İyi Karar Eşiği (TH) : {best_threshold:.4f}")
-    print(f"    - En İyi Lokal Macro-F1   : **{best_f1:.4f}**")
-
-    # 3. Final Aday Tahminleri Üret
-    print("\n[3/4] En iyi parametrelerle test tahminleri birlestiriliyor...")
-    test_prob_blend = best_w_lgbm * test_lgbm + best_w_xgb * test_xgb
-    sub_df["prediction"] = (test_prob_blend >= best_threshold).astype(int)
-
-    # 4. Submission Kaydet & QA Kontrol
-    print("\n[4/4] Submission CSV dosyası olusturuluyor...")
-    temporary_output = SUB_OUTPUT + ".tmp"
-    sub_df[["id", "prediction"]].to_csv(temporary_output, index=False)
+    if args.allow_sample and os.path.realpath(args.output) == os.path.realpath(
+        DEFAULT_OUTPUT
+    ):
+        raise ValueError("Sample ensemble runs cannot overwrite the production candidate")
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+    temporary_output = args.output + ".tmp"
+    pair_reader = pd.read_csv(
+        os.path.join(DATA_DIR, "submission_pairs.csv"),
+        usecols=["id"],
+        dtype={"id": "string"},
+        nrows=test_rows,
+        chunksize=args.chunk_size,
+    )
+    offset = 0
+    positive_count = 0
+    try:
+        for chunk in pair_reader:
+            end = offset + len(chunk)
+            probabilities = (
+                weight * arrays["test_lgbm.npy"][offset:end]
+                + (1.0 - weight) * arrays["test_xgb.npy"][offset:end]
+            )
+            predictions = (probabilities >= threshold).astype(np.int8)
+            positive_count += int(predictions.sum())
+            pd.DataFrame(
+                {"id": chunk["id"].to_numpy(), "prediction": predictions}
+            ).to_csv(
+                temporary_output,
+                mode="w" if offset == 0 else "a",
+                header=offset == 0,
+                index=False,
+            )
+            offset = end
+    except Exception:
+        if os.path.exists(temporary_output):
+            os.remove(temporary_output)
+        raise
+    finally:
+        pair_reader.close()
+    if offset != test_rows:
+        raise RuntimeError(f"Submission rows mismatch: {offset:,} != {test_rows:,}")
     if not validate_submission(
-        temporary_output, os.path.join(DATA_DIR, "sample_submission.csv")
+        temporary_output,
+        sample_submission_path=os.path.join(DATA_DIR, "sample_submission.csv"),
+        expected_rows=test_rows,
+        verbose=True,
     ):
         os.remove(temporary_output)
         raise RuntimeError("Ensemble candidate failed submission validation")
-    os.replace(temporary_output, SUB_OUTPUT)
-    print(f"  Kaydedildi: {SUB_OUTPUT}")
+    os.replace(temporary_output, args.output)
 
-    # Rapor yazdır
-    report_path = os.path.join(PROJECT_ROOT, "docs", "ensemble_karsilastirma.md")
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write("# Ensemble Ağırlıklandırma & Optimizasyon Raporu (15 Temmuz)\n\n")
-        f.write("**Hazırlayan:** Ömer Faruk Kara  \n")
-        f.write("**Tarih:** 15 Temmuz 2026  \n\n")
-        f.write("## 1. Optimizasyon Sonuçları\n\n")
-        f.write(f"| Metrik / Parametre | Değer |\n")
-        f.write(f"|---|---|\n")
-        f.write(f"| LightGBM Ağırlığı | {best_w_lgbm:.4f} |\n")
-        f.write(f"| XGBoost Ağırlığı | {best_w_xgb:.4f} |\n")
-        f.write(f"| Karar Eşiği (Threshold) | {best_threshold:.4f} |\n")
-        f.write(f"| **En İyi Macro-F1** | **{best_f1:.4f}** |\n\n")
-        f.write("## 2. Karşılaştırma\n\n")
-        f.write(f"- LightGBM Tekil (0.50): `{f1_lgb_init:.4f}`\n")
-        f.write(f"- XGBoost Tekil (0.50): `{f1_xgb_init:.4f}`\n")
-        f.write(f"- **Weighted Ensemble (Optimized): `{best_f1:.4f}`**\n\n")
-        f.write(f"Ensemble ve threshold ortak optimizasyonu sayesinde **+{best_f1 - max(f1_lgb_init, f1_xgb_init):.4f}** F1 artışı sağlanmıştır.\n")
-
-    print(f"  Rapor kaydedildi: {report_path}")
-    print("=" * 65)
+    positive_rate = positive_count / test_rows
+    decision = {
+        "validation": {
+            "lightgbm": lgb_report,
+            "xgboost": xgb_report,
+            "ensemble": blend_report,
+        },
+        "deploy": {
+            "selected_model": selected_model,
+            "lightgbm_weight": weight,
+            "xgboost_weight": 1.0 - weight,
+            "threshold": threshold,
+            "positive_rate": positive_rate,
+            "rows": test_rows,
+        },
+    }
+    _atomic_write_json(
+        os.path.join(args.artifact_dir, "ensemble_decision.json"), decision
+    )
+    _write_report(
+        args.report,
+        lgb_report,
+        xgb_report,
+        blend_report,
+        selected_model,
+        decision["deploy"],
+        positive_rate,
+    )
+    print(
+        f"Selected={selected_model} cross-fitted Macro-F1={candidates[selected_model][0]:.6f} "
+        f"weight={weight:.3f} threshold={threshold:.8f} output={args.output}"
+    )
+    return args.output
 
 
 if __name__ == "__main__":
