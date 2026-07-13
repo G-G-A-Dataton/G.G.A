@@ -26,7 +26,7 @@ def expected_requirements(path):
     return requirements
 
 
-def verify_environment(requirements_path, config_path, require_embedding_model=False):
+def verify_environment(requirements_path, config_path, require_embedding_model=False, ignore_mismatch=False):
     with open(config_path, encoding="utf-8") as config_file:
         config = json.load(config_file)
     errors = []
@@ -53,18 +53,24 @@ def verify_environment(requirements_path, config_path, require_embedding_model=F
         if not os.path.isdir(model_path):
             errors.append(f"Missing offline embedding model: {model_path}")
     if errors:
-        raise ValueError("Environment verification failed: " + "; ".join(errors))
+        message = "Environment verification failed: " + "; ".join(errors)
+        if ignore_mismatch:
+            print(f"\n[UYARI] {message}\n")
+        else:
+            raise ValueError(message)
     return {"python": actual_python, "packages": installed}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Verify pinned project environment")
     parser.add_argument("--require-embedding-model", action="store_true")
+    parser.add_argument("--ignore-mismatch", action="store_true")
     args = parser.parse_args(argv)
     result = verify_environment(
         os.path.join(PROJECT_ROOT, "requirements.txt"),
         os.path.join(PROJECT_ROOT, "configs", "final_v1.json"),
         require_embedding_model=args.require_embedding_model,
+        ignore_mismatch=args.ignore_mismatch,
     )
     print(json.dumps(result, indent=2))
     return result

@@ -144,6 +144,11 @@ def encode_in_chunks(
                 raise ValueError(f"Stale embedding checkpoint metadata: {chunk_path}")
             existing = np.load(chunk_path, mmap_mode="r", allow_pickle=False)
             _validate_embedding_array(existing, end - start, dimension, chunk_path)
+            if hasattr(existing, "base") and existing.base is not None:
+                try:
+                    existing.base.close()
+                except Exception:
+                    pass
             print(f"[embedding_batch] verified checkpoint {chunk_index + 1}/{chunk_count}")
             chunk_paths.append(chunk_path)
             continue
@@ -184,7 +189,17 @@ def encode_in_chunks(
         end = offset + len(chunk)
         final_store[offset:end] = chunk
         offset = end
+        if hasattr(chunk, "base") and chunk.base is not None:
+            try:
+                chunk.base.close()
+            except Exception:
+                pass
     final_store.flush()
+    if hasattr(final_store, "base") and final_store.base is not None:
+        try:
+            final_store.base.close()
+        except Exception:
+            pass
     del final_store
     os.replace(temporary_final, final_path)
     _atomic_save_array(ids_path, ids)

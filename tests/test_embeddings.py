@@ -25,8 +25,11 @@ class FakeEmbeddingModel:
 class EmbeddingArtifactTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.indices = []
 
     def tearDown(self):
+        for index in self.indices:
+            index.close()
         self.temp_dir.cleanup()
 
     def produce(self, target="term", keep_chunks=False):
@@ -58,6 +61,7 @@ class EmbeddingArtifactTests(unittest.TestCase):
             prefix + "_manifest.json",
             expected_target="term",
         )
+        self.indices.append(index)
         self.assertEqual(index.get_batch(["c", "a"]).shape, (2, 3))
 
     def test_unknown_ids_fail_instead_of_returning_zero_vectors(self):
@@ -67,6 +71,7 @@ class EmbeddingArtifactTests(unittest.TestCase):
             prefix + "_ids.npy",
             prefix + "_manifest.json",
         )
+        self.indices.append(index)
         with self.assertRaisesRegex(KeyError, "missing"):
             index.get_batch(["missing"])
         with self.assertRaisesRegex(ValueError, "Both verified"):

@@ -48,6 +48,10 @@ class OutOfCoreContextTests(unittest.TestCase):
             base_store = np.load(base_path, mmap_mode="r")
             context_store = np.load(context_path, mmap_mode="r")
             actual = load_feature_batch(base_store, context_store, 0, len(frame))
+            if hasattr(base_store, "base") and base_store.base is not None:
+                base_store.base.close()
+            if hasattr(context_store, "base") and context_store.base is not None:
+                context_store.base.close()
 
         self.assertEqual(actual.columns.tolist(), MODEL_FEATURE_COLS)
         np.testing.assert_allclose(

@@ -52,9 +52,21 @@ class EmbeddingIndex:
         ):
             raise ValueError("Embedding matrix shape does not match its manifest")
         self.ids = pd.Index(ids.astype(str))
+        if hasattr(ids, "base") and ids.base is not None:
+            try:
+                ids.base.close()
+            except Exception:
+                pass
         if self.ids.has_duplicates:
             raise ValueError("Embedding IDs must be unique")
         self.dimension = self.embeddings.shape[1]
+
+    def close(self):
+        if hasattr(self.embeddings, "base") and self.embeddings.base is not None:
+            try:
+                self.embeddings.base.close()
+            except Exception:
+                pass
 
     def get(self, id_):
         positions = self.ids.get_indexer([str(id_)])
