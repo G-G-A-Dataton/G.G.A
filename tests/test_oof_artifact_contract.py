@@ -75,6 +75,31 @@ class OofArtifactContractTests(unittest.TestCase):
             support_files=self.support_files,
             code_revision="a" * 40,
             feature_columns=MODEL_FEATURE_COLS,
+            training_config={
+                "random_seed": 42,
+                "n_splits": 5,
+                "num_boost_round": 200,
+                "early_stopping_rounds": 30,
+                "model_threads": 8,
+                "lightgbm_params": {
+                    "objective": "binary",
+                    "seed": 42,
+                    "num_threads": 8,
+                },
+                "xgboost_params": {
+                    "objective": "binary:logistic",
+                    "seed": 42,
+                    "nthread": 8,
+                },
+                "folds": [
+                    {
+                        "fold": fold,
+                        "lightgbm_best_iteration": 100,
+                        "xgboost_best_iteration": 100,
+                    }
+                    for fold in range(1, 6)
+                ],
+            },
         )
 
     def test_accepts_hash_verified_grouped_oof_artifacts(self):
@@ -138,6 +163,18 @@ class OofArtifactContractTests(unittest.TestCase):
             file.write(b"tampered")
         with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
             validate_oof_artifacts(self.temp_dir.name, require_full=True)
+
+    def test_rejects_tampered_model_training_config(self):
+        self.write_manifest()
+        manifest_path = os.path.join(self.temp_dir.name, "oof_manifest.json")
+        with open(manifest_path, encoding="utf-8") as manifest_file:
+            manifest = json.load(manifest_file)
+        manifest["model_training"]["model_threads"] = -1
+        with open(manifest_path, "w", encoding="utf-8") as manifest_file:
+            json.dump(manifest, manifest_file)
+
+        with self.assertRaisesRegex(ValueError, "training configuration"):
+            validate_oof_artifacts(self.temp_dir.name)
 
     def test_production_consumers_reject_stale_feature_columns(self):
         self.write_manifest()

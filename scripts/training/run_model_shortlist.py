@@ -202,6 +202,7 @@ def _train_oof(data, args, artifact_dir):
     lgbm_models = []
     xgb_models = []
     model_files = []
+    fold_training = []
 
     for fold in range(N_SPLITS):
         train_index = np.flatnonzero(fold_ids != fold)
@@ -253,6 +254,13 @@ def _train_oof(data, args, artifact_dir):
         os.replace(xgb_temp, xgb_path)
         xgb_models.append(xgb_model)
         model_files.append(xgb_filename)
+        fold_training.append(
+            {
+                "fold": fold + 1,
+                "lightgbm_best_iteration": int(lgb_model.best_iteration),
+                "xgboost_best_iteration": int(xgb_model.best_iteration + 1),
+            }
+        )
         del xgb_train, xgb_validation
         gc.collect()
 
@@ -262,7 +270,14 @@ def _train_oof(data, args, artifact_dir):
             f"xgb_f1={macro_f1_from_proba(y[validation_index], oof_xgb[validation_index]):.6f}"
         )
 
-    return oof_lgbm, oof_xgb, lgbm_models, xgb_models, model_files
+    return (
+        oof_lgbm,
+        oof_xgb,
+        lgbm_models,
+        xgb_models,
+        model_files,
+        fold_training,
+    )
 
 
 def _stream_test_predictions(data, models, args, artifact_dir, test_rows):
@@ -350,9 +365,14 @@ def main(argv=None):
     print("[1/5] Preparing shared test-shaped training matrix")
     data = prepare_training_data(args, artifact_dir, sample_terms)
     print("[2/5] Training grouped LightGBM and XGBoost OOF models")
-    oof_lgbm, oof_xgb, lgb_models, xgb_models, model_files = _train_oof(
-        data, args, artifact_dir
-    )
+    (
+        oof_lgbm,
+        oof_xgb,
+        lgb_models,
+        xgb_models,
+        model_files,
+        fold_training,
+    ) = _train_oof(data, args, artifact_dir)
     print("[3/5] Evaluating thresholds and blend without fold leakage")
     lgb_report = cross_fitted_threshold_evaluation(
         data["y"], oof_lgbm, data["fold_ids"]
@@ -414,6 +434,16 @@ def main(argv=None):
         support_files=[os.path.basename(data["vectorizer_path"])],
         code_revision=git_revision(),
         feature_columns=MODEL_FEATURE_COLS,
+        training_config={
+            "random_seed": RANDOM_SEED,
+            "n_splits": N_SPLITS,
+            "num_boost_round": getattr(args, "num_boost_round", 1_200),
+            "early_stopping_rounds": getattr(args, "early_stopping_rounds", 80),
+            "model_threads": MODEL_THREADS,
+            "lightgbm_params": LGBM_PARAMS,
+            "xgboost_params": XGB_PARAMS,
+            "folds": fold_training,
+        },
     )
     print(f"  manifest: {manifest_path}")
     return manifest_path

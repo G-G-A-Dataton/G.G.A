@@ -60,6 +60,7 @@ def write_oof_manifest(
     model_files,
     support_files,
     code_revision,
+    training_config,
     feature_columns=None,
 ):
     feature_columns = MODEL_FEATURE_COLS if feature_columns is None else feature_columns
@@ -69,7 +70,7 @@ def write_oof_manifest(
     if missing:
         raise FileNotFoundError(f"Cannot manifest missing OOF artifacts: {missing}")
     manifest = {
-        "artifact_schema_version": 2,
+        "artifact_schema_version": 3,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "context_feature_schema_version": CONTEXT_FEATURE_SCHEMA_VERSION,
         "candidate_sampling_schema_version": CANDIDATE_SAMPLING_SCHEMA_VERSION,
@@ -81,6 +82,7 @@ def write_oof_manifest(
             "random_state": 42,
             "selection": "cross_fitted",
         },
+        "model_training": training_config,
         "training_mode": training_mode,
         "test_mode": test_mode,
         "feature_columns": feature_columns,
@@ -128,7 +130,7 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
         raise FileNotFoundError(f"Missing OOF artifacts: {missing}")
 
     errors = []
-    if manifest.get("artifact_schema_version") != 2:
+    if manifest.get("artifact_schema_version") != 3:
         errors.append("unsupported artifact schema")
     if manifest.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
         errors.append("feature schema mismatch")
@@ -155,6 +157,8 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
     }
     if manifest.get("validation") != expected_validation:
         errors.append("OOF predictions are not cross-fitted by term_id")
+    if not _valid_model_training(manifest.get("model_training")):
+        errors.append("model training configuration contract mismatch")
     if prediction_files != OOF_FILENAMES:
         errors.append("OOF prediction file contract mismatch")
     if (
@@ -259,6 +263,72 @@ def _valid_candidate_sampling(sampling):
         and not isinstance(sampling.get("random_state"), bool)
         and sampling.get("positive_reference_rows") == EXPECTED_POSITIVE_ROWS
     )
+
+
+def _valid_model_training(config):
+    expected_keys = {
+        "random_seed",
+        "n_splits",
+        "num_boost_round",
+        "early_stopping_rounds",
+        "model_threads",
+        "lightgbm_params",
+        "xgboost_params",
+        "folds",
+    }
+    if not isinstance(config, dict) or set(config) != expected_keys:
+        return False
+    positive_integer_fields = (
+        "n_splits",
+        "num_boost_round",
+        "early_stopping_rounds",
+        "model_threads",
+    )
+    if config.get("random_seed") != 42 or any(
+        isinstance(config.get(field), bool)
+        or not isinstance(config.get(field), int)
+        or config[field] <= 0
+        for field in positive_integer_fields
+    ):
+        return False
+    if config["n_splits"] != 5 or config["model_threads"] != 8:
+        return False
+    lightgbm_params = config.get("lightgbm_params")
+    xgboost_params = config.get("xgboost_params")
+    if (
+        not isinstance(lightgbm_params, dict)
+        or not isinstance(xgboost_params, dict)
+        or lightgbm_params.get("objective") != "binary"
+        or lightgbm_params.get("seed") != 42
+        or lightgbm_params.get("num_threads") != 8
+        or xgboost_params.get("objective") != "binary:logistic"
+        or xgboost_params.get("seed") != 42
+        or xgboost_params.get("nthread") != 8
+    ):
+        return False
+    folds = config.get("folds")
+    if not isinstance(folds, list) or len(folds) != config["n_splits"]:
+        return False
+    if {row.get("fold") for row in folds if isinstance(row, dict)} != set(
+        range(1, config["n_splits"] + 1)
+    ):
+        return False
+    for row in folds:
+        if set(row) != {
+            "fold",
+            "lightgbm_best_iteration",
+            "xgboost_best_iteration",
+        }:
+            return False
+        for field in ("lightgbm_best_iteration", "xgboost_best_iteration"):
+            value = row.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 < value <= config["num_boost_round"]
+            ):
+                return False
+    return True
 
 
 def load_oof_artifacts(output_dir, require_full=False, source_data_dir=None):
