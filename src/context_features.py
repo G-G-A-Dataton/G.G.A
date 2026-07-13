@@ -18,7 +18,7 @@ CONTEXT_FEATURE_COLS = [
 ]
 
 
-def add_context_features(frame, group_column="term_id"):
+def add_context_features(frame, group_column="term_id", copy=True):
     """Add stable relative scores within each complete query candidate set."""
     score_columns = [
         "query_title_overlap",
@@ -37,7 +37,7 @@ def add_context_features(frame, group_column="term_id"):
         if values.isna().any() or not np.isfinite(values.to_numpy()).all():
             raise ValueError(f"Context feature column {column} must be finite numeric")
 
-    out = frame.copy()
+    out = frame.copy() if copy else frame
     grouped = out.groupby(group_column, sort=False, observed=True)
     group_sizes = grouped[group_column].transform("size").astype("float32")
     out["candidate_count_log1p"] = np.log1p(group_sizes).astype("float32")
@@ -61,4 +61,3 @@ def add_context_features(frame, group_column="term_id"):
         out[f"{source}_delta_mean"] = (out[source] - mean).astype("float32")
 
     return out
-

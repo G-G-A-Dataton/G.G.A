@@ -190,6 +190,11 @@ def add_item_text_column(items_df, include_attrs=True, col_name="item_text"):
 
 def build_item_texts(items_df, include_attrs=True):
     """Build standardized item texts without copying the source DataFrame."""
+    return list(iter_item_texts(items_df, include_attrs=include_attrs))
+
+
+def iter_item_texts(items_df, include_attrs=True):
+    """Yield standardized item texts without materializing the full catalog."""
     required = {"title", "brand", "category"}
     missing = sorted(required - set(items_df.columns))
     if missing:
@@ -199,12 +204,12 @@ def build_item_texts(items_df, include_attrs=True):
         if "attributes" in items_df.columns
         else [""] * len(items_df)
     )
-    return [
+    return (
         _combine_item_text(title, brand, category, attribute, include_attrs)
         for title, brand, category, attribute in zip(
             items_df["title"], items_df["brand"], items_df["category"], attributes
         )
-    ]
+    )
 
 
 def build_query_text(row):

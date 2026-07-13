@@ -10,7 +10,10 @@ import pandas as pd
 from pipeline import inference
 from scripts.training import run_train_full_v2
 from scripts.training.run_train_full_v2 import write_artifact_manifest
-from src.features import FEATURE_COLS, FEATURE_SCHEMA_VERSION
+from src.candidate_sampling import CANDIDATE_SAMPLING_SCHEMA_VERSION
+from src.context_features import CONTEXT_FEATURE_SCHEMA_VERSION
+from src.features import FEATURE_SCHEMA_VERSION
+from src.modeling import MODEL_FEATURE_COLS
 
 
 class ArtifactContractTests(unittest.TestCase):
@@ -22,6 +25,8 @@ class ArtifactContractTests(unittest.TestCase):
         ]
         self.vectorizer_path = os.path.join(root, "tfidf_vectorizer_v2.pkl")
         self.threshold_path = os.path.join(root, "best_threshold_v2.txt")
+        self.oof_path = os.path.join(root, "oof_preds_v2.npy")
+        self.threshold_report_path = os.path.join(root, "threshold_report_v2.json")
         self.manifest_path = os.path.join(root, "model_manifest_v2.json")
         for index, path in enumerate(self.model_paths, start=1):
             with open(path, "wb") as artifact_file:
@@ -30,12 +35,18 @@ class ArtifactContractTests(unittest.TestCase):
             artifact_file.write(b"vectorizer")
         with open(self.threshold_path, "w", encoding="utf-8") as artifact_file:
             artifact_file.write("0.45")
+        with open(self.oof_path, "wb") as artifact_file:
+            artifact_file.write(b"oof")
+        with open(self.threshold_report_path, "wb") as artifact_file:
+            artifact_file.write(b"threshold-report")
         self.write_manifest(training_mode="full")
         self.patch = mock.patch.multiple(
             inference,
             MODEL_PATHS=self.model_paths,
             VEC_PATH=self.vectorizer_path,
             THRESH_PATH=self.threshold_path,
+            OOF_PATH=self.oof_path,
+            THRESHOLD_REPORT_PATH=self.threshold_report_path,
             MANIFEST_PATH=self.manifest_path,
         )
         self.patch.start()
@@ -45,33 +56,57 @@ class ArtifactContractTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def write_manifest(self, training_mode):
-        paths = self.model_paths + [self.vectorizer_path, self.threshold_path]
+        paths = self.model_paths + [
+            self.vectorizer_path,
+            self.threshold_path,
+            self.oof_path,
+            self.threshold_report_path,
+        ]
         manifest = {
-            "artifact_schema_version": 1,
+            "artifact_schema_version": 2,
             "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "context_feature_schema_version": CONTEXT_FEATURE_SCHEMA_VERSION,
+            "candidate_sampling_schema_version": CANDIDATE_SAMPLING_SCHEMA_VERSION,
             "training_mode": training_mode,
-            "feature_columns": FEATURE_COLS + ["tfidf_cosine"],
+            "code_revision": "a" * 40,
+            "feature_columns": MODEL_FEATURE_COLS,
             "threshold": 0.45,
             "validation": {
                 "splitter": "StratifiedGroupKFold",
                 "group_column": "term_id",
                 "n_splits": 5,
                 "random_state": 42,
+                "threshold_selection": "cross_fitted",
             },
-            "negative_sampling": {
-                "strategy": "bm25_random_fallback",
-                "ratio": 3,
+            "candidate_sampling": {
+                "strategy": "test_shaped_category_random",
+                "min_candidates": 100,
+                "dense_multiplier": 2.0,
+                "category_hard_fraction": 0.5,
+                "random_state": 42,
                 "positive_reference_rows": inference.EXPECTED_POSITIVE_ROWS,
             },
             "training": {
+                "terms": inference.EXPECTED_TRAINING_TERMS,
+                "rows": inference.EXPECTED_TRAINING_ROWS,
                 "positive_rows": inference.EXPECTED_POSITIVE_ROWS,
-                "negative_rows": inference.EXPECTED_POSITIVE_ROWS * 3,
-                "total_rows": inference.EXPECTED_POSITIVE_ROWS * 4,
+                "negative_rows": (
+                    inference.EXPECTED_TRAINING_ROWS
+                    - inference.EXPECTED_POSITIVE_ROWS
+                ),
+            },
+            "metrics": {"cross_fitted_macro_f1": 0.7},
+            "source_data_sha256": {
+                "terms.csv": "a" * 64,
+                "items.csv": "b" * 64,
+                "training_pairs.csv": "c" * 64,
             },
             "artifacts": {
                 "models": [os.path.basename(path) for path in self.model_paths],
                 "vectorizer": os.path.basename(self.vectorizer_path),
                 "threshold": os.path.basename(self.threshold_path),
+                "oof_predictions": os.path.basename(self.oof_path),
+                "threshold_report": os.path.basename(self.threshold_report_path),
             },
             "sha256": {
                 os.path.basename(path): inference.sha256_file(path) for path in paths
@@ -87,19 +122,35 @@ class ArtifactContractTests(unittest.TestCase):
     def test_training_writer_emits_verifiable_manifest(self):
         write_artifact_manifest(
             artifact_dir=self.temp_dir.name,
-            feature_cols=FEATURE_COLS + ["tfidf_cosine"],
+            feature_cols=MODEL_FEATURE_COLS,
             model_paths=self.model_paths,
             vectorizer_path=self.vectorizer_path,
             threshold_path=self.threshold_path,
+            oof_path=self.oof_path,
+            threshold_report_path=self.threshold_report_path,
             threshold=0.45,
-            mean_f1=0.7,
-            std_f1=0.01,
-            best_f1=0.71,
             training_mode="full",
-            positive_rows=inference.EXPECTED_POSITIVE_ROWS,
-            negative_rows=inference.EXPECTED_POSITIVE_ROWS * 3,
-            total_rows=inference.EXPECTED_POSITIVE_ROWS * 4,
+            candidate_config={
+                "min_candidates": 100,
+                "dense_multiplier": 2.0,
+                "category_hard_fraction": 0.5,
+                "random_state": 42,
+            },
+            candidate_stats={
+                "terms": inference.EXPECTED_TRAINING_TERMS,
+                "rows": inference.EXPECTED_TRAINING_ROWS,
+                "positive_rows": inference.EXPECTED_POSITIVE_ROWS,
+                "negative_rows": inference.EXPECTED_TRAINING_ROWS
+                - inference.EXPECTED_POSITIVE_ROWS,
+            },
             positive_reference_rows=inference.EXPECTED_POSITIVE_ROWS,
+            source_data_sha256={
+                "terms.csv": "a" * 64,
+                "items.csv": "b" * 64,
+                "training_pairs.csv": "c" * 64,
+            },
+            validation_report={"cross_fitted_macro_f1": 0.7},
+            revision="a" * 40,
         )
         manifest = inference.check_dependencies()
         self.assertEqual(manifest["validation"]["group_column"], "term_id")
@@ -158,18 +209,24 @@ class ArtifactContractTests(unittest.TestCase):
 
         class FakeModel:
             def feature_name(self):
-                return FEATURE_COLS + ["tfidf_cosine"]
+                return MODEL_FEATURE_COLS
 
             def predict(self, features):
                 return [0.0] * len(features)
 
-        def fake_build_features(frame):
-            for column in FEATURE_COLS:
+        def fake_build_features(frame, **kwargs):
+            for column in MODEL_FEATURE_COLS:
                 frame[column] = 0.0
             return frame
 
-        def fake_add_tfidf(frame, vectorizer):
+        def fake_add_tfidf(frame, vectorizer, **kwargs):
             frame["tfidf_cosine"] = 0.0
+            return frame
+
+        def fake_add_context(frame, **kwargs):
+            for column in MODEL_FEATURE_COLS:
+                if column not in frame:
+                    frame[column] = 0.0
             return frame
 
         args = SimpleNamespace(
@@ -186,8 +243,10 @@ class ArtifactContractTests(unittest.TestCase):
             load_terms=mock.Mock(return_value=terms),
             load_items=mock.Mock(return_value=items),
             load_vectorizer=mock.Mock(return_value=object()),
+            verify_source_data_hashes=mock.Mock(),
             build_features=mock.Mock(side_effect=fake_build_features),
             add_tfidf_features=mock.Mock(side_effect=fake_add_tfidf),
+            add_context_features=mock.Mock(side_effect=fake_add_context),
         ), mock.patch.object(inference.lgb, "Booster", return_value=FakeModel()):
             result = inference.run_prediction_pipeline(args)
 
@@ -215,6 +274,25 @@ class ArtifactContractTests(unittest.TestCase):
         with mock.patch.object(run_train_full_v2, "parse_args", return_value=args):
             with self.assertRaisesRegex(ValueError, "cannot write"):
                 run_train_full_v2.main()
+
+    def test_complete_term_iterator_rejects_reappearing_groups(self):
+        chunks = [
+            pd.DataFrame({"term_id": ["t1", "t1", "t2"]}),
+            pd.DataFrame({"term_id": ["t2", "t1"]}),
+        ]
+        with self.assertRaisesRegex(ValueError, "reappear|not contiguous"):
+            list(inference.iter_complete_term_batches(chunks))
+
+    def test_complete_term_iterator_keeps_boundary_group_together(self):
+        chunks = [
+            pd.DataFrame({"term_id": ["t1", "t1", "t2"], "value": [1, 2, 3]}),
+            pd.DataFrame({"term_id": ["t2", "t3"], "value": [4, 5]}),
+        ]
+        batches = list(inference.iter_complete_term_batches(chunks))
+        combined = pd.concat(batches, ignore_index=True)
+        self.assertEqual(combined["value"].tolist(), [1, 2, 3, 4, 5])
+        t2_batches = [index for index, batch in enumerate(batches) if "t2" in set(batch.term_id)]
+        self.assertEqual(len(t2_batches), 1)
 
 
 if __name__ == "__main__":

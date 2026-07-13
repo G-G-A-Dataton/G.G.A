@@ -28,12 +28,12 @@ class TfidfFeatureTests(unittest.TestCase):
             }
         )
 
-    def test_attributes_are_part_of_vectorizer_corpus(self):
+    def test_searched_attribute_values_are_in_vectorizer_vocabulary(self):
         vectorizer = build_tfidf_vectorizer(
             self.terms, self.items, max_features=100, min_df=1
         )
         self.assertIn("siyah", vectorizer.vocabulary_)
-        self.assertIn("materyal", vectorizer.vocabulary_)
+        self.assertIn("deri", vectorizer.vocabulary_)
 
     def test_cosine_requires_aligned_pairs(self):
         vectorizer = build_tfidf_vectorizer(

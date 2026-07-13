@@ -407,7 +407,7 @@ def compute_material_match(query, attributes_str):
 # 5. Ana Feature Builder (features.py ile entegrasyon için)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def add_attribute_features(df, verbose=True):
+def add_attribute_features(df, verbose=True, copy=True):
     """
     Birleştirilmiş DataFrame'e attributes tabanlı feature'ları ekler.
 
@@ -430,7 +430,7 @@ def add_attribute_features(df, verbose=True):
     pd.DataFrame
         Orijinal DataFrame'e 3 yeni kolon eklenmiş hali.
     """
-    out = df.copy()
+    out = df.copy() if copy else df
 
     # 'attributes' kolonu yoksa (bazı eski scriptlerde eksik olabilir) boş string kullan
     if "attributes" not in out.columns:

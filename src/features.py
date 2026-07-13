@@ -362,7 +362,7 @@ def compute_cat_depth(category):
 # 3. Ana Feature Builder
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_features(df, verbose=True):
+def build_features(df, verbose=True, copy=True):
     """
     Birleştirilmiş (merge edilmiş) bir DataFrame'e tüm feature'ları hesaplayıp ekler.
 
@@ -384,7 +384,7 @@ def build_features(df, verbose=True):
         Orijinal DataFrame'e yeni feature kolonları eklenmiş hali.
     """
     # Değiştirmemek için kopya alıyoruz
-    out = df.copy()
+    out = df.copy() if copy else df
     required = {"query", "title", "category", "brand"}
     missing = sorted(required - set(out.columns))
     if missing:
@@ -530,7 +530,7 @@ def build_features(df, verbose=True):
     # Attributes bu boşluğu kapatır: "siyah 42 deri ayakkabı" sorgusunda tüm üç feature çalışır.
     if verbose:
         print("[features] attribute features hesaplanıyor...")
-    out = add_attribute_features(out, verbose=verbose)
+    out = add_attribute_features(out, verbose=verbose, copy=False)
 
     if verbose:
         print("[features] Tum feature'lar hesaplandi.")

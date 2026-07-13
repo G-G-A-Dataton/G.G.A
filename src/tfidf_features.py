@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from src.item_text import build_item_texts, clean_text
+from src.item_text import build_item_texts, clean_text, iter_item_texts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -96,13 +96,13 @@ def build_tfidf_vectorizer(
     # Sorgu metinlerini topla
     query_texts = [clean_text(query) for query in terms_df["query"]]
 
-    # Ürün metinlerini birleştir: title + category + brand
-    # Bu kombinasyon daha zengin bir kelime temsili sağlar
-    item_texts = build_item_texts(items_df, include_attrs=True)
+    # Stream the catalog instead of materializing ~963K Python strings. Query
+    # texts already expose searched attribute values to the vocabulary; item
+    # attributes are still included later when pair cosine scores are computed.
+    item_texts = iter_item_texts(items_df, include_attrs=False)
 
-    # Tüm metinleri tek bir listede birleştir (vocabulary tüm kelimelerden oluşsun)
     print(
-        f"[tfidf] Toplam {len(query_texts) + len(item_texts):,} metin ile "
+        f"[tfidf] Toplam {len(query_texts) + len(items_df):,} metin ile "
         "egitim basliyor..."
     )
 
@@ -231,6 +231,7 @@ def add_tfidf_features(
     vectorizer: TfidfVectorizer,
     batch_size: int = 5_000,
     verbose: bool = True,
+    copy: bool = True,
 ) -> pd.DataFrame:
     """
     Birleştirilmiş DataFrame'e TF-IDF cosine similarity feature'larını ekler.
@@ -259,7 +260,7 @@ def add_tfidf_features(
     missing = sorted(required - set(df.columns))
     if missing:
         raise ValueError(f"TF-IDF input is missing required columns: {missing}")
-    out = df.copy()
+    out = df.copy() if copy else df
 
     # Sorgu metinleri
     query_texts = [clean_text(query) for query in out["query"]]
