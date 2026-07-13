@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.analysis.run_ensemble_comparison import build_comparison
+from scripts.analysis.run_candidate_shift_analysis import normalized_quantile_distance
 from scripts.analysis.run_feature_importance import aggregate_importance
 from scripts.analysis.run_hata_taksonomisi import classify_error_signals
 from scripts.analysis.run_threshold_analysis import analyze_thresholds
@@ -12,6 +13,11 @@ from src.modeling import select_cross_fitted_candidate
 
 
 class AnalysisContractTests(unittest.TestCase):
+    def test_candidate_shift_distance_is_zero_for_identical_distributions(self):
+        values = np.array([0.0, 0.1, 0.4, 1.0])
+        raw, normalized = normalized_quantile_distance(values, values)
+        self.assertEqual((raw, normalized), (0.0, 0.0))
+
     def test_feature_importance_aggregates_verified_fold_shapes(self):
         class FakeModel:
             def __init__(self, gain, split):
