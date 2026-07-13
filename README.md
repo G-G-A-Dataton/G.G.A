@@ -44,7 +44,11 @@ G.G.A/
 │   └── submission_pairs.csv
 ├── src/                         # Üretim (Production) modülleri
 │   ├── data.py                  # Bellek dostu veri yükleme
-│   ├── features.py              # 15 feature üretimi (metin, demografik, kategori, attr)
+│   ├── features.py              # 23 lexical/demographic/category/attribute features
+│   ├── context_features.py      # 9 candidate-relative rank/gap features
+│   ├── candidate_sampling.py    # Test-shaped, leakage-free candidate generation
+│   ├── modeling.py              # Shared grouped OOF/threshold/ensemble contracts
+│   ├── out_of_core_features.py  # Global context features with bounded RAM
 │   ├── metrics.py               # Macro-F1, threshold, term_id gruplu CV
 │   ├── negative_sampling.py     # Random & BM25 hard negative üretimi
 │   ├── bm25_hard_negative.py    # BM25 hard negative örnekleyici
@@ -118,18 +122,17 @@ G.G.A/
 > [`docs/model_status.md`](docs/model_status.md) belgesini okuyun.
 
 ```bash
-# 1. Regresyon testleri ve veri pipeline doğrulaması
-python -m unittest discover -s tests -v
-python scripts/data/verify_pipeline.py
+# 1. Test, environment, frozen-data and relationship verification
+python scripts/run_production.py --stage verify
 
 # 2. Üretim artifact setini tam veriyle eğit
-python scripts/training/run_train_full_v2.py
+python scripts/run_production.py --stage train
 
 # 3. Manifest doğrulamalı submission üret
-python scripts/submission/run_pipeline.py --mode predict
+python scripts/run_production.py --stage predict
 ```
 
-`--sample` eğitimi `outputs/sample_artifacts_v2/` altında izole edilir ve
+`--sample-terms` eğitimi `outputs/sample_artifacts_v2/` altında izole edilir ve
 üretim inference akışı tarafından kabul edilmez. Tam operasyon adımları için
 [`RUNBOOK.md`](RUNBOOK.md) kanonik kaynaktır.
 
@@ -168,7 +171,7 @@ python scripts/embedding/run_embedding_score_comparison.py
 ### Veri & Kalite
 
 ```bash
-# Veri pipeline doğrulama
+python scripts/data/verify_data_freeze.py
 python scripts/data/verify_pipeline.py
 ```
 
@@ -178,7 +181,7 @@ python scripts/data/verify_pipeline.py
 
 ### Gereksinimler
 
-- **Python** 3.10+
+- **Python** 3.13.5 (see `.python-version`)
 - **Git LFS** (büyük veri dosyaları için)
 - GPU (opsiyonel, embedding hesaplama için önerilir)
 

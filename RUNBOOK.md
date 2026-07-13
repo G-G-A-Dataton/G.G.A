@@ -1,81 +1,64 @@
 # G.G.A Production Runbook
 
-This document is the canonical training, inference, and submission QA procedure.
-Run every command from the repository root with the project virtual environment
-activated.
+This is the canonical offline-capable workflow. Run commands from the repository root with `venv` activated.
 
-## 1. Verify Code and Data
+## 1. Acceptance Gate
 
 ```bash
-python -m unittest discover -s tests -v
-python scripts/data/verify_pipeline.py
+python scripts/run_production.py --stage verify
 ```
 
-The data contract is:
+The gate runs 66 regression tests, verifies every pinned package, checks the versioned data freeze in `configs/final_v1.json`, and validates all CSV relationships. Any mismatch stops the run.
 
-| File | Rows |
-|---|---:|
-| `terms.csv` | 50,153 |
-| `items.csv` | 962,873 |
-| `training_pairs.csv` | 250,000 |
-| `submission_pairs.csv` | 3,359,679 |
-| `sample_submission.csv` | 3,359,679 |
-
-## 2. Train Production Artifacts
+## 2. Production Training
 
 ```bash
-python scripts/training/run_train_full_v2.py
+python scripts/run_production.py --stage train
 ```
 
-Training uses leakage-free BM25/random negative sampling and 5-fold
-`StratifiedGroupKFold` with `group=term_id`. A successful full run writes five
-LightGBM models, the TF-IDF vectorizer, the optimized threshold, and
-`outputs/model_manifest_v2.json`. The manifest is written after all required
-inference artifacts and records the feature schema, validation contract, and
-SHA-256 hashes.
+The trainer builds 1,877,700 test-shaped candidates from all 250,000 positives. Each query receives `max(100, ceil(2 * positives))` candidates; half of the negative quota targets the positive products' L2 categories and the remainder comes from the catalog. All known positives are excluded.
 
-Quick training tests are isolated from production artifacts:
+Five LightGBM models use `StratifiedGroupKFold(group=term_id)`. Threshold selection is cross-fitted: each validation fold is evaluated with a threshold selected only on the other folds. The deploy threshold is then selected from all OOF predictions and is explicitly labeled as a deployment parameter, not an unbiased score.
+
+Production artifacts in `outputs/` include models, TF-IDF vectorizer, OOF predictions, threshold report, feature importance, and `model_manifest_v2.json`. The manifest binds feature schemas, Git revision, source-data hashes, candidate distribution, metrics, and artifact hashes.
+
+Quick runs use complete query groups and cannot overwrite production artifacts:
 
 ```bash
-python scripts/training/run_train_full_v2.py --sample 10000 --no-error-analysis
+python scripts/training/run_train_full_v2.py \
+  --sample-terms 300 --num-boost-round 200 --no-error-analysis
 ```
 
-Sample artifacts go to `outputs/sample_artifacts_v2/` and production inference
-rejects them.
-
-## 3. Run Inference
-
-Use sample mode before the full run:
+## 3. Shortlist And Ensemble
 
 ```bash
-python scripts/submission/run_pipeline.py --mode predict --sample 10000 --batch-size 5000
-python scripts/submission/run_pipeline.py --mode predict
+python scripts/training/run_model_shortlist.py
+python scripts/analysis/run_ensemble_optimization.py
 ```
 
-The pipeline validates artifact hashes and feature schema, loads the threshold
-from the production artifact set, and streams batch predictions through a
-temporary CSV. Only a QA-passing file atomically replaces
-`outputs/submission_v2.csv`; a failed run preserves the previous output. Sample
-mode writes a separate sample output.
+The shortlist trains five LightGBM and five XGBoost folds on the same matrix. Test features are written to disk-backed stores because `submission_pairs.csv` does not keep query groups contiguous. Ensemble weight and threshold are selected outside each evaluated fold. A blend is promoted only when its cross-fitted Macro-F1 exceeds both single models.
 
-## 4. Submission Contract
+## 4. Inference And QA
 
-The final CSV must have exactly these columns in this order:
-
-```text
-id,prediction
+```bash
+python scripts/run_production.py --stage predict
 ```
 
-It must contain 3,359,679 rows, preserve the exact ID order from
-`datasets/sample_submission.csv`, contain integer predictions only, and contain
-no null or duplicate IDs. The inference pipeline runs this QA automatically.
-It can also be run explicitly:
+Inference verifies artifact and source hashes, computes global candidate-relative features out of core, streams predictions, and atomically publishes `outputs/submission_v2.csv` only after QA. The output must contain 3,359,679 unique IDs in exact sample order and integer predictions in `{0, 1}`.
 
 ```bash
 python -m src.validate_submission \
   outputs/submission_v2.csv datasets/sample_submission.csv
 ```
 
-Logs are written to `outputs/pipeline.log`. A failed manifest, missing artifact,
-unresolved ID, feature mismatch, or QA check stops the pipeline with a non-zero
-exit status.
+## 5. Embeddings
+
+Embeddings are optional until a grouped comparison proves a gain. They are never silently replaced with synthetic or zero vectors.
+
+```bash
+python src/embedding_batch.py --target both \
+  --model models/paraphrase-multilingual-MiniLM-L12-v2 --offline
+python scripts/embedding/run_embedding_score_comparison.py
+```
+
+Each embedding matrix requires its hash manifest. Missing models, stale checkpoints, missing IDs, or model mismatches stop the experiment.

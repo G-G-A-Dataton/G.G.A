@@ -1,32 +1,28 @@
 # Model Validation Status
 
-**Current status (13 July 2026): no production model is validated yet.**
+**Status on 13 July 2026: production code is accepted; a full production model has not yet been trained in this workspace.**
 
-Earlier experiment scores were produced before three contract fixes:
+All scores recorded before the current contracts remain historical only. They used at least one invalid condition: row-level validation, incomplete positive exclusion, inactive attributes, synthetic embeddings, or a fixed negative ratio unlike the test candidate distribution.
 
-1. validation rows from the same `term_id` could appear in train and validation;
-2. sampled negative generation could label a known positive outside the sample as negative;
-3. the catalog's flat `attributes` format was not parsed, so attribute features were inactive.
+## Current Acceptance Contract
 
-Those scores and thresholds remain historical records only. They must not be
-used for model selection, leaderboard projections, or production inference.
+- 250,000 known positives and 17,968 complete training query groups.
+- 1,877,700 training candidates using `max(100, ceil(2 * positives))` per query.
+- Category-hard and catalog-random negatives exclude the complete positive reference.
+- 33 model features: 23 base, TF-IDF cosine, and 9 candidate-relative context features.
+- Five `StratifiedGroupKFold` folds grouped by `term_id`.
+- Cross-fitted threshold and ensemble evaluation.
+- Data, code, feature, model, OOF, and decision artifacts protected by version/hash manifests.
+- Global test context computed out of core; submission query groups are not assumed contiguous.
+- Atomic binary submission publishing after exact ID/row/schema QA.
 
-The current acceptance contract is:
+## Verified Runs
 
-- negatives exclude every pair in the full positive reference set;
-- every positive pair receives the configured per-term negative quota;
-- validation uses `StratifiedGroupKFold(group=term_id)`;
-- the threshold is optimized from the new grouped OOF predictions;
-- production artifacts include a full-training manifest and verified SHA-256 hashes;
-- the final submission passes `src.validate_submission` against the sample file.
+- Unit/integration suite: 66 passing tests.
+- Canonical training smoke: 20 complete terms, 2,396 candidates, five folds, artifact manifest generated.
+- Shortlist smoke: 10 complete terms, five LightGBM + five XGBoost folds, 200 test rows, valid OOF manifest and submission.
+- BM25 smoke: 20,000 catalog items in 2.71 seconds, approximately 140 MB peak RSS.
 
-Re-establish a validated baseline with:
+Smoke scores are pipeline acceptance evidence only. They are too small for model selection or leaderboard projection.
 
-```bash
-python -m unittest discover -s tests -v
-python scripts/training/run_train_full_v2.py
-python scripts/submission/run_pipeline.py --mode predict
-```
-
-After the full training run, record its grouped fold scores, threshold, manifest
-hashes, and any real Kaggle score in `docs/experiment_log.md` as a new experiment.
+Run the full acceptance sequence from [`RUNBOOK.md`](../RUNBOOK.md). After the full run, record the cross-fitted scores, deploy decision, artifact hashes, runtime/RSS, and actual Kaggle score in `docs/experiment_log.md`.

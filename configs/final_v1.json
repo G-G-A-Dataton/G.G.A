@@ -1,0 +1,63 @@
+{
+  "config_schema_version": 1,
+  "name": "gga_final_v1",
+  "random_state": 42,
+  "candidate_sampling": {
+    "strategy": "test_shaped_category_random",
+    "min_candidates": 100,
+    "dense_multiplier": 2.0,
+    "category_hard_fraction": 0.5
+  },
+  "validation": {
+    "splitter": "StratifiedGroupKFold",
+    "group_column": "term_id",
+    "n_splits": 5,
+    "threshold_selection": "cross_fitted"
+  },
+  "features": {
+    "feature_schema_version": 3,
+    "context_feature_schema_version": 1,
+    "tfidf_max_features": 10000,
+    "tfidf_ngram_range": [1, 1],
+    "tfidf_min_df": 2
+  },
+  "environment": {
+    "python": "3.13.5",
+    "offline_prediction_required": true
+  },
+  "data_freeze": {
+    "version": "data_v1_2026-07-13",
+    "files": {
+      "terms.csv": {
+        "bytes": 1625432,
+        "rows": 50153,
+        "columns": ["term_id", "query"],
+        "sha256": "9f94b15f225049bca882c50d8ee86f726d889456826d57a791bd3c4f33006812"
+      },
+      "items.csv": {
+        "bytes": 402056631,
+        "rows": 962873,
+        "columns": ["item_id", "title", "category", "brand", "gender", "age_group", "attributes"],
+        "sha256": "e420c87572fe1c4169d2021cb43a35813fe59f4d2cfe55e90eaf61a6fd477f21"
+      },
+      "training_pairs.csv": {
+        "bytes": 12250025,
+        "rows": 250000,
+        "columns": ["id", "term_id", "item_id", "label"],
+        "sha256": "3e015fd88e0900729a9444227a21bcefaa7be661f8319f3f1afec5eb5cdc9463"
+      },
+      "submission_pairs.csv": {
+        "bytes": 171343648,
+        "rows": 3359679,
+        "columns": ["id", "term_id", "item_id"],
+        "sha256": "2d89e1622156776d37185c7f8d1fd7c34eaf5f475f07fb6adf89f64314b60b56"
+      },
+      "sample_submission.csv": {
+        "bytes": 70553273,
+        "rows": 3359679,
+        "columns": ["id", "prediction"],
+        "sha256": "6e75f1dcf4dab4b127a1ea988041a36f6cb1ec0b190cd9461c4cb144fb30adeb"
+      }
+    }
+  }
+}
