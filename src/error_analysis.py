@@ -313,8 +313,7 @@ def _write_markdown_report(fp_df, fn_df, tp_df, tn_df, patterns, path, threshold
 
 
 if __name__ == "__main__":
-    # Çalıştırmak için önce run_baseline.py veya run_baseline_tfidf.py
-    # çalıştırılmış ve OOF tahminleri elde edilmiş olmalıdır.
+    # Rapor üretmek için grouped OOF tahminleri elde edilmiş olmalıdır.
     # Bu script doğrudan çalıştırılırsa kısa bir demo gösterir.
     print("[error_analysis] Bu modul dogrudan import edilerek kullanilir.")
     print("Ornek kullanim:")

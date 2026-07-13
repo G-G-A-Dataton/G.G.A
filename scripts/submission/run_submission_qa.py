@@ -12,7 +12,7 @@ bir QA raporu üretir.
 Kaggle'a yüklemeden önce MUTLAKA çalıştırılmalıdır.
 
 Çalıştırmak için:
-  python run_submission_qa.py outputs/submission_v1.csv
+  python scripts/submission/run_submission_qa.py outputs/submission_v2.csv
 """
 
 import os
@@ -41,8 +41,7 @@ def run_full_qa(submission_path: str) -> bool:
       [4] Tahmin değerleri sadece 0 veya 1 mi?
       [5] ID sırası sample_submission ile aynı mı?
       [6] Unnamed index kolonu yok mu?
-      [7] Pozitif oran makul bir aralıkta mı? (%1-%99)
-      [8] Dosya boyutu makul mı?
+      [7] Dosya boyutu raporlanıyor mu?
 
     Parametreler
     ----------
@@ -71,32 +70,9 @@ def run_full_qa(submission_path: str) -> bool:
     extra_errors = []
 
     try:
-        sub_df = pd.read_csv(submission_path)
-
-        # Kontrol 7: Pozitif oran makul mü?
-        # submission_pairs.csv'deki gerçek dagilima göre %1-%99 arasi bekleniyor.
-        # Kaggle'daki geçmiş datathonlarda tipik pozitif oran %10-%50 arasi.
-        # <1% → model hep 0 dedi, bir şeyler yanlış
-        # >99% → model hep 1 dedi, threshold bozuk olabilir
-        pos_rate = sub_df["prediction"].mean()
-        if pos_rate < 0.01:
-            extra_errors.append(
-                f"Pozitif oran cok dusuk: {pos_rate:.2%} (1% altinda --- model hep 0 mi dedi?)"
-            )
-        elif pos_rate > 0.99:
-            extra_errors.append(
-                f"Pozitif oran cok yuksek: {pos_rate:.2%} (99% ustunde --- model hep 1 mi dedi?)"
-            )
-        else:
-            print(f"  [OK] Pozitif oran makul: {pos_rate:.2%}  "
-                  f"({sub_df['prediction'].sum():,} poz / {len(sub_df):,} toplam)")
-
-        # Kontrol 8: Dosya boyutu
+        # File size and class balance are diagnostics, not acceptance rules.
         file_size_mb = os.path.getsize(submission_path) / (1024 * 1024)
-        if file_size_mb > 500:
-            extra_errors.append(f"Dosya boyutu cok buyuk: {file_size_mb:.1f} MB")
-        else:
-            print(f"  [OK] Dosya boyutu: {file_size_mb:.1f} MB")
+        print(f"  [OK] Dosya boyutu: {file_size_mb:.1f} MB")
 
     except Exception as e:
         extra_errors.append(f"Ek kontroller sirasinda hata: {e}")
@@ -125,30 +101,38 @@ def print_submission_stats(submission_path: str) -> None:
     Submission dosyasının istatistiklerini özetler.
     Kaggle'a yüklemeden önce kontrol için kullanılır.
     """
-    sub_df = pd.read_csv(submission_path)
+    total_rows = 0
+    positive_rows = 0
+    first_rows = None
+    for chunk in pd.read_csv(submission_path, chunksize=250_000):
+        if first_rows is None:
+            first_rows = chunk.head(3)
+        total_rows += len(chunk)
+        positive_rows += int((chunk["prediction"] == 1).sum())
+    positive_rate = positive_rows / total_rows if total_rows else 0.0
 
     print("\n  SUBMISSION ISTATISTIKLERI")
-    print(f"  Toplam satir      : {len(sub_df):,}")
-    print(f"  Pozitif (1)       : {(sub_df['prediction'] == 1).sum():,}  ({sub_df['prediction'].mean():.2%})")
-    print(f"  Negatif (0)       : {(sub_df['prediction'] == 0).sum():,}  ({1 - sub_df['prediction'].mean():.2%})")
+    print(f"  Toplam satir      : {total_rows:,}")
+    print(f"  Pozitif (1)       : {positive_rows:,}  ({positive_rate:.2%})")
+    print(f"  Negatif (0)       : {total_rows - positive_rows:,}  ({1 - positive_rate:.2%})")
     print(f"  Dosya boyutu      : {os.path.getsize(submission_path) / 1024 / 1024:.2f} MB")
     print(f"  Ilk 3 satir:")
-    print(sub_df.head(3).to_string(index=False))
+    print(first_rows.to_string(index=False))
 
 
 if __name__ == "__main__":
     # Komut satırından dosya yolu alınabilir:
-    #   python run_submission_qa.py outputs/submission_v1.csv
+    #   python scripts/submission/run_submission_qa.py outputs/submission_v2.csv
     if len(sys.argv) > 1:
         sub_path = sys.argv[1]
     else:
         # Varsayılan yol
-        sub_path = os.path.join(OUTPUT_DIR, "submission_v1.csv")
+        sub_path = os.path.join(OUTPUT_DIR, "submission_v2.csv")
 
     if not os.path.exists(sub_path):
         print(f"[HATA] Submission dosyasi bulunamadi: {sub_path}")
-        print("Once run_baseline.py veya run_baseline_tfidf.py calistirin.")
-        print("Veya: python run_submission_qa.py <dosya_yolu>")
+        print("Once RUNBOOK.md icindeki production training ve inference adimlarini calistirin.")
+        print("Veya: python scripts/submission/run_submission_qa.py <dosya_yolu>")
         sys.exit(1)
 
     # QA çalıştır

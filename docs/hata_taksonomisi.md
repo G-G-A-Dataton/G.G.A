@@ -1,5 +1,10 @@
 # Hata Taksonomisi Raporu (12 Temmuz)
 
+> [!CAUTION]
+> **Historical, invalidated analysis.** The OOF predictions and fixed threshold
+> predate grouped validation and the corrected attribute parser. Counts below
+> must not be treated as current model behavior.
+
 **Hazırlayan:** Ahmet Emin Işın  
 **Tarih:** 12 Temmuz 2026  
 **Threshold:** 0.35  

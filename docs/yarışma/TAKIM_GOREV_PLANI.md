@@ -298,7 +298,7 @@ Her deney aşağıdaki formatta kaydedilecek.
 | Veri versiyonu | `random3_bm25top50_v2` |
 | Feature set | `overlap + tfidf + category + gender` |
 | Model | `LightGBM` |
-| Validation şeması | `5-fold StratifiedKFold` |
+| Validation şeması | `5-fold StratifiedGroupKFold`, group=`term_id` |
 | Threshold | `0.37` |
 | Local Macro-F1 | `0.7421` |
 | Public Kaggle skoru | `0.xx` |

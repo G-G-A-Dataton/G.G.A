@@ -25,11 +25,11 @@ Bir kullanıcının arama terimi (query) ile bir ürün (item) arasında **alaka
 
 | Dosya | Satır Sayısı | Açıklama |
 |---|---|---|
-| `items.csv` | ~966K | Ürün kataloğu (title, category, brand, gender, age_group, attributes) |
-| `terms.csv` | ~50K | Arama terimleri (term_id, query) |
-| `training_pairs.csv` | ~250K | Eğitim çiftleri — sadece label=1 |
-| `submission_pairs.csv` | ~3.36M | Tahmin edilecek çiftler |
-| `sample_submission.csv` | ~3.36M | Gönderim formatı örneği |
+| `items.csv` | 962,873 | Ürün kataloğu (title, category, brand, gender, age_group, attributes) |
+| `terms.csv` | 50,153 | Arama terimleri (term_id, query) |
+| `training_pairs.csv` | 250,000 | Eğitim çiftleri — sadece label=1 |
+| `submission_pairs.csv` | 3,359,679 | Tahmin edilecek çiftler |
+| `sample_submission.csv` | 3,359,679 | Gönderim formatı örneği |
 
 ---
 
@@ -45,7 +45,7 @@ G.G.A/
 ├── src/                         # Üretim (Production) modülleri
 │   ├── data.py                  # Bellek dostu veri yükleme
 │   ├── features.py              # 15 feature üretimi (metin, demografik, kategori, attr)
-│   ├── metrics.py               # Macro-F1, threshold tarama, Stratified K-Fold
+│   ├── metrics.py               # Macro-F1, threshold, term_id gruplu CV
 │   ├── negative_sampling.py     # Random & BM25 hard negative üretimi
 │   ├── bm25_hard_negative.py    # BM25 hard negative örnekleyici
 │   ├── attributes.py            # Renk/beden/materyal attribute parse
@@ -114,17 +114,24 @@ G.G.A/
 
 ### Temel Akış (Hızlı Başlangıç)
 
+> Güncel model durumu ve eski deneylerin geçerlilik sınırı için
+> [`docs/model_status.md`](docs/model_status.md) belgesini okuyun.
+
 ```bash
-# 1. Veri pipeline doğrula
+# 1. Regresyon testleri ve veri pipeline doğrulaması
+python -m unittest discover -s tests -v
 python scripts/data/verify_pipeline.py
 
-# 2. Baseline model eğit
-python scripts/training/run_baseline.py
-
-# 3. Submission dosyası üret
+# 2. Üretim artifact setini tam veriyle eğit
 python scripts/training/run_train_full_v2.py
-python scripts/submission/run_full_submission_v2.py
+
+# 3. Manifest doğrulamalı submission üret
+python scripts/submission/run_pipeline.py --mode predict
 ```
+
+`--sample` eğitimi `outputs/sample_artifacts_v2/` altında izole edilir ve
+üretim inference akışı tarafından kabul edilmez. Tam operasyon adımları için
+[`RUNBOOK.md`](RUNBOOK.md) kanonik kaynaktır.
 
 ### Analiz Scriptleri
 

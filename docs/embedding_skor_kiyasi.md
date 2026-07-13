@@ -1,5 +1,9 @@
 # Embedding Cosine Feature Skor Kiyasi (12 Temmuz)
 
+> [!CAUTION]
+> **Historical PoC only.** Synthetic embedding results and row-level CV scores
+> in this document are not production validation evidence.
+
 **Hazırlayan:** Ömer Faruk Kara  
 **Tarih:** 12 Temmuz 2026  
 **Cosine kaynagi:** sentetik  

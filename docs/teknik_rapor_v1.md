@@ -1,5 +1,9 @@
 # Teknik Rapor Bölümü v1 — EDA ve Feature Engineering Bulguları (10 Temmuz)
 
+> [!NOTE]
+> Historical draft. Model scores and feature conclusions that depend on legacy
+> CV or the former attribute parser are not current validation evidence.
+
 **Hazırlayan:** Ahmet Emin Işın  
 **Tarih:** 10 Temmuz 2026  
 **Kapsam:** Sprint 1-2 boyunca elde edilen tüm EDA ve feature bulguları

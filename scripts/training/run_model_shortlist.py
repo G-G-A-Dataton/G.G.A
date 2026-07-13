@@ -7,7 +7,7 @@ G.G.A Takımı — Model Shortlist & Validation Tahminleri (14 Temmuz Görevi)
 
 Bu script:
   1. En iyi iki modeli (LightGBM Tuned ve XGBoost Tuned) eğitir.
-  2. 5-Fold Stratified CV kullanarak her iki model için Out-of-Fold (OOF)
+  2. 5-Fold Stratified Group CV kullanarak her iki model için Out-of-Fold (OOF)
      tahmin olasılıklarını üretir.
   3. Test/Submission veri seti üzerinde tahmin olasılıklarını hesaplar.
   4. Daha sonra ensemble ağırlıklandırması ve ortak optimizasyon yapmak üzere
@@ -39,6 +39,7 @@ from src.features          import build_features, FEATURE_COLS
 from src.tfidf_features    import build_tfidf_vectorizer, add_tfidf_features, save_vectorizer
 from src.train_mix_v2      import build_mixed_training_set
 from src.metrics           import get_stratified_group_kfold, macro_f1_from_proba, find_best_threshold
+from src.oof_artifacts     import write_oof_manifest
 
 try:
     import xgboost as xgb
@@ -51,7 +52,8 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 RANDOM_SEED = 42
-NEGATIVE_RATIO = 2  # Deney matrisinde en iyi sonuç veren oran
+NEGATIVE_RATIO = 3  # Current production baseline; legacy ratio matrix is invalidated.
+EXPECTED_POSITIVE_ROWS = 250_000
 
 # LightGBM Tuned Parametreleri
 LGBM_PARAMS = {
@@ -85,12 +87,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Model Shortlist & OOF Tahmin Export")
     parser.add_argument("--sample", type=int, default=None, help="Hizli test icin pozitif ornek sayisi")
     parser.add_argument("--test-sample", type=int, default=None, help="Hizli test icin test ornek sayisi")
+    parser.add_argument("--artifact-dir", default=None, help="OOF artifact cikti dizini")
     return parser.parse_args()
 
 
 def train_and_predict_oof(X, y, groups, X_test, model_type="lgbm"):
     """
-    5-Fold Stratified CV ile OOF ve Test tahminlerini üretir.
+    5-Fold Stratified Group CV ile OOF ve Test tahminlerini üretir.
     """
     skf = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     oof_preds = np.zeros(len(X))
@@ -140,6 +143,25 @@ def train_and_predict_oof(X, y, groups, X_test, model_type="lgbm"):
 
 def main():
     args = parse_args()
+    if args.sample is not None and args.sample <= 0:
+        raise ValueError("--sample must be positive")
+    if args.test_sample is not None and args.test_sample <= 0:
+        raise ValueError("--test-sample must be positive")
+    artifact_dir = os.path.abspath(
+        args.artifact_dir
+        or os.path.join(
+            OUTPUT_DIR,
+            "ensemble_sample_artifacts"
+            if args.sample or args.test_sample
+            else "ensemble_artifacts",
+        )
+    )
+    production_artifact_dir = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
+    if (args.sample or args.test_sample) and os.path.realpath(
+        artifact_dir
+    ) == os.path.realpath(production_artifact_dir):
+        raise ValueError("Sample OOF runs cannot overwrite production ensemble artifacts")
+    os.makedirs(artifact_dir, exist_ok=True)
 
     print("=" * 65)
     print("  G.G.A — Model Shortlist & Validation Tahminleri")
@@ -157,6 +179,10 @@ def main():
         os.path.join(DATA_DIR, "training_pairs.csv"),
         dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
     )
+    if len(train_raw) != EXPECTED_POSITIVE_ROWS or set(train_raw["label"].unique()) != {1}:
+        raise ValueError(
+            "training_pairs.csv must contain exactly 250,000 positive rows"
+        )
     positive_reference = train_raw[["term_id", "item_id"]].copy()
 
     if args.sample:
@@ -183,7 +209,7 @@ def main():
     print("  TF-IDF vectorizer egitiliyor...")
     vectorizer = build_tfidf_vectorizer(terms_df, items_df, max_features=10000, ngram_range=(1, 1))
     merged = add_tfidf_features(merged, vectorizer)
-    save_vectorizer(vectorizer, os.path.join(OUTPUT_DIR, "tfidf_vectorizer_v2.pkl"))
+    save_vectorizer(vectorizer, os.path.join(artifact_dir, "tfidf_vectorizer_v2.pkl"))
 
     # Test/Submission setini yükle ve hazırla
     sub_path = os.path.join(DATA_DIR, "submission_pairs.csv")
@@ -226,20 +252,32 @@ def main():
 
     # 4. Tahminleri Dışa Aktar (Export)
     print("\n[5/5] OOF ve test tahminleri kaydediliyor...")
-    np.save(os.path.join(OUTPUT_DIR, "oof_lgbm.npy"), oof_lgbm)
-    np.save(os.path.join(OUTPUT_DIR, "test_lgbm.npy"), test_lgbm)
-    np.save(os.path.join(OUTPUT_DIR, "oof_xgb.npy"), oof_xgb)
-    np.save(os.path.join(OUTPUT_DIR, "test_xgb.npy"), test_xgb)
-    np.save(os.path.join(OUTPUT_DIR, "y_true.npy"), y.values)
+    np.save(os.path.join(artifact_dir, "oof_lgbm.npy"), oof_lgbm)
+    np.save(os.path.join(artifact_dir, "test_lgbm.npy"), test_lgbm)
+    np.save(os.path.join(artifact_dir, "oof_xgb.npy"), oof_xgb)
+    np.save(os.path.join(artifact_dir, "test_xgb.npy"), test_xgb)
+    np.save(os.path.join(artifact_dir, "y_true.npy"), y.values)
     
     # Test setindeki ID'leri de kaydet ki eşleştirebilelim
-    sub_df[["id", "term_id", "item_id"]].to_csv(os.path.join(OUTPUT_DIR, "test_metadata.csv"), index=False)
+    sub_df[["id", "term_id", "item_id"]].to_csv(os.path.join(artifact_dir, "test_metadata.csv"), index=False)
+    manifest_path = write_oof_manifest(
+        output_dir=artifact_dir,
+        feature_columns=feature_cols,
+        training_mode="sample" if args.sample else "full",
+        test_mode="sample" if args.test_sample else "full",
+        training_rows=len(y),
+        test_rows=len(sub_df),
+        negative_ratio=NEGATIVE_RATIO,
+        positive_rows=(full_train["label"] == 1).sum(),
+        positive_reference_rows=len(positive_reference),
+    )
 
     print("\n[OK] Tüm adımlar başarıyla tamamlandı!")
-    print(f"  OOF LGBM  : {os.path.join(OUTPUT_DIR, 'oof_lgbm.npy')}")
-    print(f"  Test LGBM : {os.path.join(OUTPUT_DIR, 'test_lgbm.npy')}")
-    print(f"  OOF XGB   : {os.path.join(OUTPUT_DIR, 'oof_xgb.npy')}")
-    print(f"  Test XGB  : {os.path.join(OUTPUT_DIR, 'test_xgb.npy')}")
+    print(f"  OOF LGBM  : {os.path.join(artifact_dir, 'oof_lgbm.npy')}")
+    print(f"  Test LGBM : {os.path.join(artifact_dir, 'test_lgbm.npy')}")
+    print(f"  OOF XGB   : {os.path.join(artifact_dir, 'oof_xgb.npy')}")
+    print(f"  Test XGB  : {os.path.join(artifact_dir, 'test_xgb.npy')}")
+    print(f"  Manifest  : {manifest_path}")
     print("=" * 65)
 
 

@@ -24,7 +24,10 @@ warnings.filterwarnings("ignore")
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+from src.oof_artifacts import validate_oof_artifacts
+
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
 DOCS_DIR = os.path.join(PROJECT_ROOT, "docs")
 os.makedirs(DOCS_DIR, exist_ok=True)
 
@@ -51,8 +54,9 @@ def main():
     print("=" * 65)
 
     # 1. Tahminleri Yükle
-    oof_path = os.path.join(OUTPUT_DIR, "oof_lgbm.npy")
-    y_true_path = os.path.join(OUTPUT_DIR, "y_true.npy")
+    manifest = validate_oof_artifacts(ARTIFACT_DIR, require_full=True)
+    oof_path = os.path.join(ARTIFACT_DIR, "oof_lgbm.npy")
+    y_true_path = os.path.join(ARTIFACT_DIR, "y_true.npy")
 
     if not os.path.exists(oof_path) or not os.path.exists(y_true_path):
         print("[HATA] OOF tahminleri bulunamadı!")
@@ -61,6 +65,11 @@ def main():
 
     y_prob = np.load(oof_path)
     y_true = np.load(y_true_path)
+    if (
+        len(y_prob) != manifest["training_rows"]
+        or len(y_true) != manifest["training_rows"]
+    ):
+        raise ValueError("OOF arrays do not match the artifact manifest")
 
     print(f"  Yüklenen Tahmin Sayısı: {len(y_prob):,}")
 

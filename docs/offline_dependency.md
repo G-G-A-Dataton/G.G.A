@@ -14,23 +14,22 @@ Aşağıdaki paketler `pip install` veya `conda install` ile önceden yüklenmel
 |---|---|---|
 | `lightgbm` | ≥ 4.0 | `run_baseline.py`, `run_lgbm_tuning.py`, tüm ML scriptleri |
 | `xgboost` | ≥ 2.0 | `run_model_comparison.py`, `run_ensemble_comparison.py` |
-| `scikit-learn` | ≥ 1.3 | `src/metrics.py` (StratifiedKFold, f1_score) |
+| `scikit-learn` | ≥ 1.3 | `src/metrics.py` (StratifiedGroupKFold, f1_score) |
 | `pandas` | ≥ 2.0 | Tüm scriptler |
 | `numpy` | ≥ 1.24 | Tüm scriptler |
 | `scipy` | ≥ 1.10 | TF-IDF cosine similarity |
 | `sentence-transformers` | ≥ 2.2 | `src/embedding_batch.py` |
 | `rank_bm25` | ≥ 0.2 | `src/bm25_hard_negative.py` |
-| `psutil` | ≥ 5.9 | `run_submission_feature_dryrun.py` |
 | `tqdm` | ≥ 4.0 | İlerleme çubukları (opsiyonel) |
 
 ### Offline Kurulum Komutu
 
 ```bash
 # Önce bağlantılı ortamda tüm paketleri wheel dosyalarına indir
-pip download lightgbm xgboost scikit-learn pandas numpy scipy sentence-transformers rank_bm25 psutil -d ./offline_packages/
+pip download lightgbm xgboost scikit-learn pandas numpy scipy sentence-transformers rank_bm25 -d ./offline_packages/
 
 # Yarışma gününde offline kurulum
-pip install --no-index --find-links ./offline_packages/ lightgbm xgboost scikit-learn pandas numpy scipy sentence-transformers rank_bm25 psutil
+pip install --no-index --find-links ./offline_packages/ lightgbm xgboost scikit-learn pandas numpy scipy sentence-transformers rank_bm25
 ```
 
 ---
@@ -70,7 +69,7 @@ Yarışma gününde zaman kaybetmemek için bu dosyalar önceden üretilmeli:
 
 | Dosya | Boyut (tahmini) | Nasıl Üretilir |
 |---|---|---|
-| `outputs/embeddings/term_embeddings.npy` | ~75MB | `python run_term_embeddings.py` |
+| `outputs/embeddings/term_embeddings.npy` | ~75MB | `python scripts/embedding/run_term_embeddings.py` |
 | `outputs/embeddings/term_ids.npy` | ~3MB | Aynı komut |
 | `outputs/embeddings/item_embeddings.npy` | ~1.5GB | `python src/embedding_batch.py --target items` |
 | `outputs/embeddings/item_ids.npy` | ~30MB | Aynı komut |
@@ -120,8 +119,9 @@ for f in files:
     print(f'{f}: {ok}')
 "
 
-# 4. Feature pipeline dry-run
-python run_submission_feature_dryrun.py
+# 4. Kod ve veri sözleşmeleri
+python -m unittest discover -s tests -v
+python scripts/data/verify_pipeline.py
 ```
 
 ---
@@ -134,7 +134,7 @@ python run_submission_feature_dryrun.py
 | 2 | Embedding modelini local'e kaydet | 5 dk |
 | 3 | Term embeddinglerini üret | 5-10 dk |
 | 4 | Item embeddinglerini üret | 30-60 dk (CPU), 5-10 dk (GPU) |
-| 5 | Dry-run ile feature pipeline doğrula | 2 dk |
-| 6 | Baseline modeli eğit ve submission üret | 10-20 dk |
+| 5 | Testler ve veri sözleşmesiyle pipeline doğrula | 2-5 dk |
+| 6 | Tam modeli eğit ve kanonik submission üret | Ortama bağlı |
 
 *Bu belge yarışma öncesi offline hazırlık rehberi olarak kullanılmalıdır.*

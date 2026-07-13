@@ -188,7 +188,10 @@ def generate_random_negatives(
         uretilecek_termler = adaylar.loc[~gecerli, "term_id"].to_numpy()
 
     negatives = pd.concat(kabul_edilenler, ignore_index=True)
-    assert len(negatives) == hedef, "Uretilen negatif sayisi beklenenden farkli!"
+    if len(negatives) != hedef:
+        raise RuntimeError(
+            f"Negative quota mismatch: expected {hedef}, got {len(negatives)}"
+        )
     negatives["label"] = 0
 
     if verbose:

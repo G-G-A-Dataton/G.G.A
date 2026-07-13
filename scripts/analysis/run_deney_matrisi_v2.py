@@ -151,7 +151,7 @@ def write_report(results_df, path):
         "",
         "**Hazırlayan:** Ömer Faruk Kara  ",
         "**Tarih:** 11 Temmuz 2026  ",
-        "**Yöntem:** 5-Fold Stratified CV, seed=42  ",
+        "**Yöntem:** 5-Fold StratifiedGroupKFold, group=term_id, seed=42  ",
         f"**Pozitif örnek:** {SAMPLE_POS:,}",
         "",
         "## Eksenler",

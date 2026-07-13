@@ -1,5 +1,10 @@
 # Feature Importance Raporu (10 Temmuz)
 
+> [!CAUTION]
+> **Historical, invalidated result.** This run used the old attribute parser,
+> which could not read the catalog's `key: value` format, and row-level CV.
+> The zero attribute gains describe that broken run, not the current features.
+
 **Hazırlayan:** Ömer Faruk Kara  
 **Tarih:** 10 Temmuz 2026  
 **Feature sayısı:** 15  

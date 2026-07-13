@@ -74,7 +74,7 @@ print(f"  Feature sayisi: {len(FEATURE_COLS)}")
 print(f"  Feature listesi: {FEATURE_COLS}")
 
 # ─── 4. Model Eğitimi — 5-Fold CV ─────────────────────────────────────────
-print("\n[4/6] LightGBM 5-Fold Stratified CV basliyor...")
+print("\n[4/6] LightGBM 5-Fold Stratified Group CV basliyor...")
 print("-" * 45)
 
 X = merged[FEATURE_COLS]

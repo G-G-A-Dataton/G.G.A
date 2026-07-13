@@ -11,7 +11,7 @@ Bu script:
      kullanarak model ağırlıklarını ve karar eşiğini (threshold) AYNI ANDA optimize eder.
   3. Lokal Macro-F1 skorunu maksimize eden en iyi parametreleri belirler.
   4. Bu en iyi parametrelerle "Final Aday Model v1" tahminlerini ve Kaggle
-     formatına uygun submission_v2.csv dosyasını üretir.
+     formatına uygun submission_ensemble_candidate.csv dosyasını üretir.
 
 Çalıştırmak için:
   python scripts/analysis/run_ensemble_optimization.py
@@ -32,10 +32,12 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.validate_submission import validate_submission
+from src.oof_artifacts import validate_oof_artifacts
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
-SUB_OUTPUT = os.path.join(OUTPUT_DIR, "submission_v2.csv")
+ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
+SUB_OUTPUT = os.path.join(OUTPUT_DIR, "submission_ensemble_candidate.csv")
 
 
 def f1_objective(params, oof_lgbm, oof_xgb, y_true):
@@ -71,13 +73,14 @@ def main():
 
     # 1. Tahminleri Yükle
     print("\n[1/4] Tahmin dosyaları yukleniyor...")
+    manifest = validate_oof_artifacts(ARTIFACT_DIR, require_full=True)
     paths = {
-        "oof_lgbm"  : os.path.join(OUTPUT_DIR, "oof_lgbm.npy"),
-        "test_lgbm" : os.path.join(OUTPUT_DIR, "test_lgbm.npy"),
-        "oof_xgb"   : os.path.join(OUTPUT_DIR, "oof_xgb.npy"),
-        "test_xgb"  : os.path.join(OUTPUT_DIR, "test_xgb.npy"),
-        "y_true"    : os.path.join(OUTPUT_DIR, "y_true.npy"),
-        "metadata"  : os.path.join(OUTPUT_DIR, "test_metadata.csv")
+        "oof_lgbm"  : os.path.join(ARTIFACT_DIR, "oof_lgbm.npy"),
+        "test_lgbm" : os.path.join(ARTIFACT_DIR, "test_lgbm.npy"),
+        "oof_xgb"   : os.path.join(ARTIFACT_DIR, "oof_xgb.npy"),
+        "test_xgb"  : os.path.join(ARTIFACT_DIR, "test_xgb.npy"),
+        "y_true"    : os.path.join(ARTIFACT_DIR, "y_true.npy"),
+        "metadata"  : os.path.join(ARTIFACT_DIR, "test_metadata.csv")
     }
 
     missing = [k for k, p in paths.items() if not os.path.exists(p)]
@@ -95,6 +98,14 @@ def main():
     test_xgb = np.load(paths["test_xgb"])
     y_true = np.load(paths["y_true"])
     sub_df = pd.read_csv(paths["metadata"], dtype={"id": "string", "term_id": "string", "item_id": "string"})
+    if any(
+        len(values) != manifest["training_rows"]
+        for values in (oof_lgbm, oof_xgb, y_true)
+    ) or any(
+        len(values) != manifest["test_rows"]
+        for values in (test_lgbm, test_xgb, sub_df)
+    ):
+        raise ValueError("OOF array lengths do not match the artifact manifest")
 
     print(f"  LightGBM OOF Boyutu: {oof_lgbm.shape}")
     print(f"  XGBoost OOF Boyutu  : {oof_xgb.shape}")
@@ -144,11 +155,15 @@ def main():
 
     # 4. Submission Kaydet & QA Kontrol
     print("\n[4/4] Submission CSV dosyası olusturuluyor...")
-    sub_df[["id", "prediction"]].to_csv(SUB_OUTPUT, index=False)
+    temporary_output = SUB_OUTPUT + ".tmp"
+    sub_df[["id", "prediction"]].to_csv(temporary_output, index=False)
+    if not validate_submission(
+        temporary_output, os.path.join(DATA_DIR, "sample_submission.csv")
+    ):
+        os.remove(temporary_output)
+        raise RuntimeError("Ensemble candidate failed submission validation")
+    os.replace(temporary_output, SUB_OUTPUT)
     print(f"  Kaydedildi: {SUB_OUTPUT}")
-
-    # Basit QA kontrolü yap
-    validate_submission(SUB_OUTPUT, os.path.join(DATA_DIR, "sample_submission.csv"))
 
     # Rapor yazdır
     report_path = os.path.join(PROJECT_ROOT, "docs", "ensemble_karsilastirma.md")

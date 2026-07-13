@@ -99,7 +99,7 @@ feature_cols_tfidf = FEATURE_COLS + ["tfidf_cosine"]
 print(f"  Toplam feature sayisi: {len(feature_cols_tfidf)} ({len(FEATURE_COLS)} temel + 1 TF-IDF)")
 
 # ─── 6. LightGBM 5-Fold CV ────────────────────────────────────────────────
-print("\n[6/7] LightGBM 5-Fold Stratified CV...")
+print("\n[6/7] LightGBM 5-Fold Stratified Group CV...")
 print("-" * 50)
 
 X = merged[feature_cols_tfidf]

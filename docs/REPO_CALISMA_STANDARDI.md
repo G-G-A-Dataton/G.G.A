@@ -54,7 +54,7 @@ Yapılan her model veya özellik (feature) deneyi, takım içi karşılaştırma
 | **Veri Versiyonu** | Kullanılan negatif örnekleme oranı ve yöntemi |
 | **Model Tipi** | LightGBM, XGBoost, CatBoost vb. |
 | **Kullanılan Özellikler** | Eklenen veya çıkarılan özellik gruplarının özeti |
-| **Validation Şeması** | Örn: `5-Fold Stratified K-Fold` (Holdout, CV vb.) |
+| **Validation Şeması** | `5-Fold StratifiedGroupKFold`, group=`term_id` |
 | **Local Macro-F1** | Modelin yerel doğrulama skoru |
 | **Kaggle Public F1** | Kaggle Leaderboard üzerindeki skor (eğer submit edildiyse) |
 | **Karar & Notlar** | Sonraki adımlarda bu modelin/özelliklerin kullanılıp kullanılmayacağı |
@@ -66,7 +66,7 @@ Yapılan her model veya özellik (feature) deneyi, takım içi karşılaştırma
 Herhangi bir tahmin dosyası Kaggle'a yüklenmeden önce aşağıdaki kontrollere tabi tutulacaktır. Bu kontrolleri otomatik koşan `src/validate_submission.py` scripti kullanılabilir:
 
 - [ ] **Kolon Uyumu:** Sadece `id` ve `prediction` kolonları bulunmalıdır.
-- [ ] **Satır Sayısı:** Satır sayısı tam olarak `3.359.681` (header dahil `3.359.682`) olmalıdır.
+- [ ] **Satır Sayısı:** Veri satırı sayısı tam olarak `3.359.679` (header dahil dosyada `3.359.680` satır) olmalıdır.
 - [ ] **ID Sırası:** `sample_submission.csv` ile tahmin dosyasındaki `id` değerlerinin sırası birebir eşleşmelidir.
 - [ ] **Tahmin Değerleri:** `prediction` kolonu sadece `0` veya `1` (binary) değerlerini içermelidir. `NaN` veya float değer olmamalıdır.
 - [ ] **Index Kontrolü:** CSV dosyası kaydedilirken Pandas'ın `index=False` parametresi kesinlikle kullanılmalıdır.

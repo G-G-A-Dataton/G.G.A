@@ -137,12 +137,14 @@ LGBM_PARAMS = {
 
 ### 4.3 Validation Stratejisi
 
-**5-Fold Stratified Cross-Validation:**
-- Her fold pozitif/negatif oranını korur
+**5-Fold Stratified Group Cross-Validation:**
+- Her `term_id` yalnızca tek fold'da bulunur
+- Fold'lar pozitif/negatif oranını olabildiğince korur
 - OOF (Out-of-Fold) tahminleri ile threshold optimizasyonu yapılır
 - Seed sabit tutularak tekrarlanabilirlik sağlanır
 
-**11 Temmuz Threshold Analizi:** Optimal threshold = **0.35** (varsayılan 0.5 değil).
+**Threshold durumu:** Eski `0.35` sonucu geçersizdir. Eşik, yeni grouped OOF
+tahminlerinden eğitim sırasında hesaplanır ve artifact manifestine yazılır.
 
 ---
 
@@ -163,7 +165,7 @@ LGBM_PARAMS = {
 1. Gerçek embedding cosine feature ne kadar katkı sağlar? (12 Temmuz sonucu sentetikti)
 2. BM25 hard negative vs random negatif tam veri setinde ne fark yaratır?
 3. Ensemble (LGBM + XGB) gerçek anlamda F1 artırır mı? (13 Temmuz)
-4. Optimal threshold tam eğitim setinde de 0.35 mi kalır?
+4. Tam grouped eğitim koşusunun optimal threshold değeri nedir?
 
 ---
 

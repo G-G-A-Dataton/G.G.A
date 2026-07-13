@@ -55,6 +55,8 @@ _AGE_KEYWORDS = {
     "yetişkin": "yetişkin", "yetiskin": "yetişkin", "adult": "yetişkin",
 }
 
+FEATURE_SCHEMA_VERSION = 2
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Temel Yardımcı Fonksiyonlar
