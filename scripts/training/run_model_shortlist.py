@@ -49,6 +49,7 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 PRODUCTION_ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
 RANDOM_SEED = 42
 N_SPLITS = 5
+MODEL_THREADS = 8
 BM25_HARD_FRACTION = 0.20
 CATEGORY_HARD_FRACTION = 0.50
 BM25_TOP_N = 200
@@ -68,7 +69,7 @@ LGBM_PARAMS = {
     "deterministic": True,
     "force_col_wise": True,
     "seed": RANDOM_SEED,
-    "num_threads": -1,
+    "num_threads": MODEL_THREADS,
     "verbosity": -1,
 }
 XGB_PARAMS = {
@@ -83,7 +84,7 @@ XGB_PARAMS = {
     "reg_alpha": 0.2,
     "reg_lambda": 1.5,
     "seed": RANDOM_SEED,
-    "nthread": -1,
+    "nthread": MODEL_THREADS,
 }
 
 
