@@ -15,7 +15,12 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.modeling import (
     select_cross_fitted_candidate,
 )
+from src.delivery_artifacts import (
+    validate_delivery_manifest,
+    write_delivery_manifest,
+)
 from src.oof_artifacts import load_oof_artifacts
+from scripts.training.run_train_full_v2 import git_revision
 from src.validate_submission import validate_submission
 
 
@@ -24,6 +29,7 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
 DEFAULT_ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "ensemble_artifacts")
 DEFAULT_OUTPUT = os.path.join(OUTPUT_DIR, "submission_v2.csv")
 DEFAULT_REPORT = os.path.join(PROJECT_ROOT, "docs", "ensemble_selection.md")
+DEFAULT_MANIFEST = os.path.join(OUTPUT_DIR, "submission_v2.manifest.json")
 
 
 def parse_args(argv=None):
@@ -31,6 +37,7 @@ def parse_args(argv=None):
     parser.add_argument("--artifact-dir", default=DEFAULT_ARTIFACT_DIR)
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--report", default=DEFAULT_REPORT)
+    parser.add_argument("--manifest", default=None)
     parser.add_argument("--chunk-size", type=int, default=250_000)
     parser.add_argument(
         "--allow-sample",
@@ -71,7 +78,8 @@ def _write_report(
         f"- Threshold: `{deploy['threshold']:.8f}`",
         f"- Candidate positive rate: `{positive_rate:.4%}`",
         "",
-        "The all-OOF selection score is recorded for reproducibility only; it is not an unbiased validation estimate.",
+        "The all-OOF selection score is recorded for reproducibility only; "
+        "it is not an unbiased validation estimate.",
         "",
     ]
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -85,6 +93,7 @@ def main(argv=None):
     args = parse_args(argv)
     if args.chunk_size <= 0:
         raise ValueError("--chunk-size must be positive")
+    revision = git_revision()
     manifest, arrays = load_oof_artifacts(
         args.artifact_dir,
         require_full=not args.allow_sample,
@@ -187,10 +196,33 @@ def main(argv=None):
         decision["deploy"],
         positive_rate,
     )
+    decision_path = os.path.join(args.artifact_dir, "ensemble_decision.json")
+    manifest_path = args.manifest or (
+        os.path.join(OUTPUT_DIR, "submission_v2_sample.manifest.json")
+        if args.allow_sample
+        else DEFAULT_MANIFEST
+    )
+    write_delivery_manifest(
+        manifest_path,
+        project_root=PROJECT_ROOT,
+        submission_path=args.output,
+        decision_path=decision_path,
+        oof_manifest_path=os.path.join(args.artifact_dir, "oof_manifest.json"),
+        code_revision=revision,
+        submission_rows=test_rows,
+        positive_rows=positive_count,
+    )
+    validate_delivery_manifest(
+        manifest_path,
+        project_root=PROJECT_ROOT,
+        source_data_dir=DATA_DIR,
+        require_full=not args.allow_sample,
+    )
     print(
         f"Selected={selected_model} cross-fitted Macro-F1="
         f"{selection['deploy']['cross_fitted_macro_f1']:.6f} "
-        f"weight={weight:.3f} threshold={threshold:.8f} output={args.output}"
+        f"weight={weight:.3f} threshold={threshold:.8f} output={args.output} "
+        f"manifest={manifest_path}"
     )
     return args.output
 
