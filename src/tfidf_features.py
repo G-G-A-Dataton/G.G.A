@@ -345,6 +345,7 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
     from src.data import load_terms, load_items, merge_pairs
+    from src.candidate_sampling import sample_complete_terms
     from src.negative_sampling import build_training_set
 
     data_dir = os.path.join(os.path.dirname(__file__), "..", "datasets")
@@ -358,9 +359,10 @@ if __name__ == "__main__":
     )
 
     # Küçük örnek üzerinde eğitim seti oluştur (hız için)
-    print("\nKucuk ornek egitim seti olusturuluyor (1000 pozitif, ratio=1)...")
+    print("\nKucuk ornek egitim seti olusturuluyor (100 tam sorgu, ratio=1)...")
+    selected = sample_complete_terms(train_raw, 100, random_state=42)
     small_train = build_training_set(
-        train_raw.sample(1000, random_state=42), items_df,
+        selected, items_df,
         ratio=1, random_state=42, verbose=False,
         positive_reference_df=train_raw,
     )

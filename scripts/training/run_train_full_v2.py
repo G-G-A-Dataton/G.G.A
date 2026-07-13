@@ -30,6 +30,7 @@ from src.modeling import (
     MODEL_FEATURE_COLS,
     build_group_fold_ids,
     cross_fitted_threshold_evaluation,
+    predictions_from_threshold_report,
 )
 from src.tfidf_features import (
     add_tfidf_features,
@@ -386,11 +387,15 @@ def main(argv=None):
         os.path.join(artifact_dir, "feature_importance_v2.csv"), index=False
     )
     if not getattr(args, "no_error_analysis", False):
+        cross_fitted_predictions = predictions_from_threshold_report(
+            oof_predictions, fold_ids, threshold_report
+        )
         generate_error_report(
             merged,
             oof_predictions,
-            threshold=threshold,
+            threshold="fold-specific",
             output_path=os.path.join(artifact_dir, "error_report_v2.md"),
+            predictions=cross_fitted_predictions,
         )
 
     source_hashes = {name: sha256_file(path) for name, path in paths.items()}

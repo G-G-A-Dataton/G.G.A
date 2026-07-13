@@ -74,6 +74,30 @@ def cross_fitted_threshold_evaluation(y_true, probabilities, fold_ids):
     }
 
 
+def predictions_from_threshold_report(probabilities, fold_ids, report):
+    """Apply the fold-specific thresholds recorded by cross-fitted evaluation."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    fold_ids = np.asarray(fold_ids)
+    if (
+        probabilities.ndim != 1
+        or fold_ids.shape != probabilities.shape
+        or not np.isfinite(probabilities).all()
+        or ((probabilities < 0) | (probabilities > 1)).any()
+    ):
+        raise ValueError("probabilities and fold_ids must be aligned valid vectors")
+    fold_parameters = {row["fold"]: row for row in report.get("folds", [])}
+    predictions = np.zeros(len(probabilities), dtype=np.int8)
+    for fold in np.unique(fold_ids):
+        parameters = fold_parameters.get(int(fold))
+        if parameters is None:
+            raise ValueError(f"threshold report is missing fold {int(fold)}")
+        mask = fold_ids == fold
+        predictions[mask] = (
+            probabilities[mask] >= parameters["threshold"]
+        ).astype(np.int8)
+    return predictions
+
+
 def cross_fitted_ensemble_evaluation(
     y_true,
     first_probabilities,

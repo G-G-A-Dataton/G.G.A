@@ -1,234 +1,218 @@
-"""
-run_embedding_score_comparison.py
-==================================
-G.G.A Takimi -- Embedding Cosine Feature Skora Etkisi (12 Temmuz Gorevi)
+"""Grouped ablation of manifest-verified embedding cosine features."""
 
-Omer Faruk Kara tarafından hazırlanmıştır.
-
-Bu script, embedding cosine similarity feature'inin model performansina
-katkisini olcer. Iki ayar karsilastirilir:
-
-  LGBM_BASE  : 15 temel feature (tfidf dahil, embedding yok)
-  LGBM_EMB   : 15 temel feature + embedding_cosine
-
-Yalnizca manifest ile doğrulanmış gerçek embedding artifactleri kullanılır.
-
-Calistirmak icin:
-  python run_embedding_score_comparison.py
-
-Not: Gercek embedding elde etmek icin once:
-  python run_term_embeddings.py
-  python src/embedding_batch.py --target items
-"""
-
+import argparse
 import os
 import sys
 import time
-import warnings
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.data              import load_terms, load_items
 from src.candidate_sampling import build_test_shaped_training_set, sample_complete_terms
 from src.context_features import add_context_features
-from src.features          import build_features
-from src.metrics           import macro_f1_from_proba, get_stratified_group_kfold
-from src.embedding_cosine  import add_embedding_cosine_feature, load_embedding_indexes
-from src.modeling import MODEL_FEATURE_COLS, build_group_fold_ids, cross_fitted_threshold_evaluation
-from src.tfidf_features import build_tfidf_vectorizer, add_tfidf_features
-import lightgbm as lgb
+from src.data import load_items, load_terms
+from src.embedding_cosine import add_embedding_cosine_feature, load_embedding_indexes
+from src.features import build_features
+from src.modeling import (
+    MODEL_FEATURE_COLS,
+    build_group_fold_ids,
+    cross_fitted_threshold_evaluation,
+)
+from src.tfidf_features import add_tfidf_features, build_tfidf_vectorizer
 
-DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-DOCS_DIR   = os.path.join(PROJECT_ROOT, "docs")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-SAMPLE_TERMS = 300
+DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
+DEFAULT_OUTPUT = os.path.join(PROJECT_ROOT, "outputs", "embedding_comparison.csv")
+DEFAULT_REPORT = os.path.join(PROJECT_ROOT, "docs", "embedding_comparison.md")
 RANDOM_SEED = 42
-
+EMBEDDING_FEATURE = "embedding_cosine"
 LGBM_PARAMS = {
-    "objective"        : "binary",
-    "metric"           : "binary_logloss",
-    "num_leaves"       : 31,
-    "learning_rate"    : 0.05,
-    "min_child_samples": 20,
-    "subsample"        : 0.8,
-    "colsample_bytree" : 0.8,
-    "verbose"          : -1,
-    "random_state"     : RANDOM_SEED,
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "learning_rate": 0.04,
+    "num_leaves": 63,
+    "min_child_samples": 100,
+    "feature_fraction": 0.85,
+    "bagging_fraction": 0.85,
+    "bagging_freq": 1,
+    "reg_alpha": 0.2,
+    "reg_lambda": 1.5,
+    "deterministic": True,
+    "force_col_wise": True,
+    "seed": RANDOM_SEED,
+    "num_threads": -1,
+    "verbosity": -1,
 }
 
-EMBEDDING_FEATURE = "embedding_cosine"
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Compare canonical features with verified embedding cosine"
+    )
+    parser.add_argument("--sample-terms", type=int, default=300)
+    parser.add_argument("--num-boost-round", type=int, default=500)
+    parser.add_argument("--early-stopping-rounds", type=int, default=50)
+    parser.add_argument("--output", default=DEFAULT_OUTPUT)
+    parser.add_argument("--report", default=DEFAULT_REPORT)
+    return parser.parse_args(argv)
 
 
-def run_cv(X, y, groups, feature_cols, label=""):
-    """
-    5-Fold CV ile Macro-F1 olcer.
-
-    Parametreler
-    ----------
-    X : pd.DataFrame
-    y : pd.Series
-    feature_cols : list of str
-    label : str  — cikti icin etiket
-
-    Dondurur
-    -------
-    dict
-    """
-    missing = sorted(set(feature_cols) - set(X.columns))
+def run_cv(frame, feature_columns, num_boost_round, early_stopping_rounds, label):
+    """Evaluate one feature contract with shared grouped folds and cross-fitting."""
+    missing = sorted(set(feature_columns) - set(frame.columns))
     if missing:
-        raise ValueError(f"Embedding experiment is missing features: {missing}")
-    X_sub = X[feature_cols]
-
-    skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
-    scores    = []
-    oof_preds = np.zeros(len(X_sub))
-    t0        = time.time()
-
-    for fold, (tr_idx, val_idx) in enumerate(
-        skf.split(X_sub, y, groups=groups), start=1
-    ):
-        print(f"  [{label}] Fold {fold}/5 ...", end="\r")
-        dtrain = lgb.Dataset(X_sub.iloc[tr_idx], label=y.iloc[tr_idx])
-        dval   = lgb.Dataset(X_sub.iloc[val_idx], label=y.iloc[val_idx])
-
-        model = lgb.train(
-            LGBM_PARAMS, dtrain,
-            num_boost_round=500,
-            valid_sets=[dval],
-            callbacks=[
-                lgb.early_stopping(30, verbose=False),
-                lgb.log_evaluation(period=-1),
-            ]
+        raise ValueError(f"embedding experiment is missing features: {missing}")
+    X = frame[feature_columns].astype("float32")
+    y = frame["label"].to_numpy(dtype=np.int8)
+    fold_ids = build_group_fold_ids(
+        y, frame["term_id"].to_numpy(), n_splits=5, random_state=RANDOM_SEED
+    )
+    oof = np.zeros(len(frame), dtype=np.float32)
+    iterations = []
+    started = time.monotonic()
+    for fold in np.unique(fold_ids):
+        train_index = np.flatnonzero(fold_ids != fold)
+        validation_index = np.flatnonzero(fold_ids == fold)
+        train_data = lgb.Dataset(X.iloc[train_index], label=y[train_index])
+        validation_data = lgb.Dataset(
+            X.iloc[validation_index],
+            label=y[validation_index],
+            reference=train_data,
         )
-        val_proba = model.predict(X_sub.iloc[val_idx])
-        oof_preds[val_idx] = val_proba
-        scores.append(macro_f1_from_proba(y.iloc[val_idx], val_proba, threshold=0.5))
-
-    elapsed = time.time() - t0
-    print(f"  [{label}] 5 fold tamamlandi.          ")
-
-    mean_f1 = float(np.mean(scores))
-    std_f1  = float(np.std(scores))
-    fold_ids = build_group_fold_ids(y.values, groups.values, n_splits=5)
-    report = cross_fitted_threshold_evaluation(y.values, oof_preds, fold_ids)
-
+        model = lgb.train(
+            LGBM_PARAMS,
+            train_data,
+            num_boost_round=num_boost_round,
+            valid_sets=[validation_data],
+            callbacks=[
+                lgb.early_stopping(early_stopping_rounds, verbose=False),
+                lgb.log_evaluation(period=0),
+            ],
+        )
+        oof[validation_index] = model.predict(
+            X.iloc[validation_index], num_iteration=model.best_iteration
+        )
+        iterations.append(model.best_iteration)
+    report = cross_fitted_threshold_evaluation(y, oof, fold_ids)
     return {
-        "label"          : label,
-        "n_features"     : len(feature_cols),
-        "mean_f1"        : round(mean_f1, 4),
-        "std_f1"         : round(std_f1, 4),
-        "best_threshold" : report["deploy_threshold"],
-        "best_f1"        : round(report["cross_fitted_macro_f1"], 4),
-        "train_sec"      : round(elapsed, 1),
+        "candidate": label,
+        "feature_count": len(feature_columns),
+        "cross_fitted_macro_f1": report["cross_fitted_macro_f1"],
+        "fold_macro_f1_mean": report["fold_macro_f1_mean"],
+        "fold_macro_f1_std": report["fold_macro_f1_std"],
+        "deploy_threshold": report["deploy_threshold"],
+        "all_oof_selection_macro_f1": report["all_oof_selection_macro_f1"],
+        "mean_best_iteration": float(np.mean(iterations)),
+        "training_seconds": time.monotonic() - started,
     }
 
 
-if __name__ == "__main__":
-    print("=" * 65)
-    print("  G.G.A - Embedding Cosine Feature Skora Etkisi (12 Temmuz)")
-    print("=" * 65)
+def _atomic_write_frame(frame, path):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    frame.to_csv(temporary_path, index=False)
+    os.replace(temporary_path, path)
 
-    # 1. Veri hazirla
-    print("\n[1/4] Veri yukleniyor...")
-    terms_df = load_terms(os.path.join(DATA_DIR, "terms.csv"))
-    items_df  = load_items(os.path.join(DATA_DIR, "items.csv"))
-    train_raw = pd.read_csv(
+
+def _write_report(path, results, separation, sample_terms):
+    base = results.loc[results["candidate"] == "base"].iloc[0]
+    embedding = results.loc[results["candidate"] == "base_plus_embedding"].iloc[0]
+    delta = embedding["cross_fitted_macro_f1"] - base["cross_fitted_macro_f1"]
+    lines = [
+        "# Embedding Cosine Ablation",
+        "",
+        "Only manifest-verified, fully covered embedding matrices are accepted. The comparison uses complete query groups and fold-external threshold selection.",
+        "",
+        f"- Complete sampled terms: `{sample_terms:,}`",
+        f"- Cosine separation: `{separation:.6f}`",
+        f"- Cross-fitted Macro-F1 delta: `{delta:+.6f}`",
+        "- Production promotion requires a positive full-data ablation; this sample result alone is not sufficient.",
+        "",
+        "| Candidate | Features | Cross-fitted Macro-F1 | Fold std | Deploy threshold | Seconds |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for row in results.itertuples(index=False):
+        lines.append(
+            f"| {row.candidate} | {row.feature_count} | "
+            f"{row.cross_fitted_macro_f1:.6f} | {row.fold_macro_f1_std:.6f} | "
+            f"{row.deploy_threshold:.8f} | {row.training_seconds:.1f} |"
+        )
+    lines.append("")
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as report_file:
+        report_file.write("\n".join(lines))
+    os.replace(temporary_path, path)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.sample_terms < 5:
+        raise ValueError("--sample-terms must be at least 5")
+    if args.num_boost_round <= 0 or args.early_stopping_rounds <= 0:
+        raise ValueError("boosting and early-stopping rounds must be positive")
+    terms = load_terms(os.path.join(DATA_DIR, "terms.csv"))
+    items = load_items(os.path.join(DATA_DIR, "items.csv"))
+    positives = pd.read_csv(
         os.path.join(DATA_DIR, "training_pairs.csv"),
-        dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
+        dtype={
+            "id": "string",
+            "term_id": "string",
+            "item_id": "string",
+            "label": "int8",
+        },
     )
-
-    pos_sample = sample_complete_terms(train_raw, SAMPLE_TERMS, RANDOM_SEED)
-    full_train = build_test_shaped_training_set(
-        pos_sample, items_df,
-        positive_reference_df=train_raw,
-        random_state=RANDOM_SEED, verbose=False,
+    selected = sample_complete_terms(
+        positives, args.sample_terms, random_state=RANDOM_SEED
     )
-    merged = full_train.merge(terms_df, on="term_id", how="left")
-    merged = merged.merge(items_df,  on="item_id",  how="left")
-    merged = build_features(merged, copy=False)
-    vectorizer = build_tfidf_vectorizer(terms_df, items_df)
-    merged = add_tfidf_features(merged, vectorizer, copy=False)
-    merged = add_context_features(merged, copy=False)
-    groups = merged["term_id"]
-    print(f"  {len(merged):,} satir, {len(MODEL_FEATURE_COLS)} temel feature hazir")
-
-    # 2. Embedding cosine ekle (gercek veya sentetik)
-    print("\n[2/4] Embedding cosine feature hazirlaniyor...")
+    candidates = build_test_shaped_training_set(
+        selected,
+        items,
+        positive_reference_df=positives,
+        random_state=RANDOM_SEED,
+    )
+    frame = candidates.merge(
+        terms, on="term_id", how="left", validate="many_to_one"
+    ).merge(items, on="item_id", how="left", validate="many_to_one")
+    frame = build_features(frame, copy=False)
+    vectorizer = build_tfidf_vectorizer(terms, items)
+    frame = add_tfidf_features(frame, vectorizer, copy=False)
+    frame = add_context_features(frame, copy=False)
     term_index, item_index = load_embedding_indexes(PROJECT_ROOT)
-
-    print("  Doğrulanmış gerçek embedding lookup yapılıyor...")
-    merged = add_embedding_cosine_feature(merged, term_index, item_index)
-    emb_source = "manifest_verified"
-
-    sep = merged.loc[merged["label"] == 1, EMBEDDING_FEATURE].mean() - \
-          merged.loc[merged["label"] == 0, EMBEDDING_FEATURE].mean()
-    print(f"  Cosine separation: {sep:.4f}  (kaynak: {emb_source})")
-
-    X = merged[MODEL_FEATURE_COLS + [EMBEDDING_FEATURE]]
-    y = merged["label"]
-
-    # 3. CV karsilastirma: baseline vs embedding ekli
-    print("\n[3/4] Karsilastirma deneyleri basliyor...")
-    results = []
-
-    print("\n  -- LGBM_BASE (embedding yok) --")
-    r_base = run_cv(X, y, groups, MODEL_FEATURE_COLS, label="LGBM_BASE")
-    results.append(r_base)
-
-    print("\n  -- LGBM_EMB (embedding cosine ekli) --")
-    r_emb = run_cv(
-        X, y, groups, MODEL_FEATURE_COLS + [EMBEDDING_FEATURE], label="LGBM_EMB"
+    frame = add_embedding_cosine_feature(frame, term_index, item_index)
+    separation = float(
+        frame.loc[frame["label"] == 1, EMBEDDING_FEATURE].mean()
+        - frame.loc[frame["label"] == 0, EMBEDDING_FEATURE].mean()
     )
-    results.append(r_emb)
+    results = pd.DataFrame(
+        [
+            run_cv(
+                frame,
+                MODEL_FEATURE_COLS,
+                args.num_boost_round,
+                args.early_stopping_rounds,
+                "base",
+            ),
+            run_cv(
+                frame,
+                [*MODEL_FEATURE_COLS, EMBEDDING_FEATURE],
+                args.num_boost_round,
+                args.early_stopping_rounds,
+                "base_plus_embedding",
+            ),
+        ]
+    )
+    _atomic_write_frame(results, args.output)
+    _write_report(args.report, results, separation, args.sample_terms)
+    print(results.to_string(index=False))
+    print(f"comparison={args.output}\nreport={args.report}")
+    return args.output
 
-    # 4. Sonuclar
-    diff = r_emb["best_f1"] - r_base["best_f1"]
-    print("\n" + "=" * 65)
-    print("  KARSILASTIRMA TABLOSU")
-    print("=" * 65)
-    print(f"  {'Model':<15} {'N Feature':>10} {'mean_F1':>9} {'best_F1':>9} {'Threshold':>10} {'Sure':>7}")
-    print("  " + "-" * 60)
-    for r in results:
-        print(f"  {r['label']:<15} {r['n_features']:>10} {r['mean_f1']:>9.4f} "
-              f"{r['best_f1']:>9.4f} {r['best_threshold']:>10} {r['train_sec']:>6.1f}s")
 
-    print(f"\n  Embedding cosine etkisi: {diff:+.4f}  (kaynak: {emb_source})")
-    if diff > 0.001:
-        print("  >> Embedding cosine feature kalici olarak eklenmeli!")
-    elif diff > 0:
-        print("  >> Kucuk pozitif etki. Gercek embedding ile tekrar test edilmeli.")
-    else:
-        print("  >> Negatif etki! Sentetik cosine gurultulu olabilir.")
-        print("     Gercek embedding ile tekrar test edilmeli.")
-
-    # CSV kaydet
-    df = pd.DataFrame(results)
-    out_csv = os.path.join(OUTPUT_DIR, "embedding_skor_kiyasi.csv")
-    df.to_csv(out_csv, index=False)
-
-    # Markdown raporu
-    out_md = os.path.join(DOCS_DIR, "embedding_skor_kiyasi.md")
-    with open(out_md, "w", encoding="utf-8") as f:
-        f.write("# Embedding Cosine Feature Skor Kiyasi (12 Temmuz)\n\n")
-        f.write("**Hazırlayan:** Ömer Faruk Kara  \n")
-        f.write("**Tarih:** 12 Temmuz 2026  \n")
-        f.write(f"**Cosine kaynagi:** {emb_source}  \n\n---\n\n")
-        f.write("## Sonuc\n\n")
-        f.write("| Model | N Feature | mean_F1 | best_F1 | Threshold |\n")
-        f.write("|---|---|---|---|---|\n")
-        for r in results:
-            f.write(f"| {r['label']} | {r['n_features']} | {r['mean_f1']} | **{r['best_f1']}** | {r['best_threshold']} |\n")
-        f.write(f"\n**Embedding cosine etkisi:** `{diff:+.4f}`  \n")
-        f.write(f"**Cosine separation:** `{sep:.4f}`  \n\n")
-        f.write(f"\n*CSV: `outputs/embedding_skor_kiyasi.csv`*\n")
-
-    print(f"\n  CSV  : {out_csv}")
-    print(f"  Rapor: {out_md}")
-    print("=" * 65)
+if __name__ == "__main__":
+    main()

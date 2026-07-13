@@ -117,7 +117,7 @@ def _xgb_predict(model, matrix):
     return model.predict(matrix, iteration_range=iteration_range)
 
 
-def _prepare_training(args, artifact_dir, sample_terms):
+def prepare_training_data(args, artifact_dir, sample_terms):
     terms = load_terms(os.path.join(DATA_DIR, "terms.csv"))
     items = load_items(os.path.join(DATA_DIR, "items.csv"))
     positives = pd.read_csv(
@@ -323,7 +323,7 @@ def main(argv=None):
         raise ValueError(f"--test-sample cannot exceed {EXPECTED_TEST_ROWS}")
 
     print("[1/5] Preparing shared test-shaped training matrix")
-    data = _prepare_training(args, artifact_dir, sample_terms)
+    data = prepare_training_data(args, artifact_dir, sample_terms)
     print("[2/5] Training grouped LightGBM and XGBoost OOF models")
     oof_lgbm, oof_xgb, lgb_models, xgb_models, model_files = _train_oof(
         data, args, artifact_dir

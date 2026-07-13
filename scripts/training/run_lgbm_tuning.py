@@ -1,211 +1,156 @@
-"""
-run_lgbm_tuning.py
-==================
-G.G.A Takımı — LightGBM Hiperparametre Ayarlama (8 Temmuz Görevi)
+"""Tune LightGBM on the canonical test-shaped matrix with grouped OOF folds."""
 
-Ömer Faruk Kara tarafından hazırlanmıştır.
-
-Bu script LightGBM modelinin temel parametrelerini sistematik olarak
-dener ve Macro-F1 üzerindeki etkisini ölçer.
-
-Denenen parametreler:
-  - num_leaves      : 15, 31, 63
-  - learning_rate   : 0.01, 0.05, 0.1
-  - min_child_samples: 10, 20, 50
-
-Çalıştırmak için:
-  python run_lgbm_tuning.py
-"""
-
+import argparse
+import itertools
 import os
 import sys
-import itertools
-import warnings
+from types import SimpleNamespace
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.data              import load_terms, load_items
-from src.features          import build_features, FEATURE_COLS
-from src.negative_sampling import build_training_set
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
-import lightgbm as lgb
-
-DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Sabit parametreler — sadece denenen parametreler değişecek
-BASE_PARAMS = {
-    "objective"    : "binary",
-    "metric"       : "binary_logloss",
-    "subsample"    : 0.8,
-    "colsample_bytree": 0.8,
-    "verbose"      : -1,
-    "random_state" : 42,
-}
-
-# Denenen parametre değerleri
-PARAM_GRID = {
-    "num_leaves"       : [15, 31, 63],
-    "learning_rate"    : [0.01, 0.05, 0.1],
-    "min_child_samples": [10, 20, 50],
-}
-
-SAMPLE_POS  = 2_000
-NEG_RATIO   = 3
-RANDOM_SEED = 42
+from scripts.training.run_model_shortlist import (
+    LGBM_PARAMS,
+    prepare_training_data,
+)
+from src.modeling import cross_fitted_threshold_evaluation
 
 
-def run_single_experiment(X, y, groups, num_leaves, learning_rate, min_child_samples):
-    """
-    Tek bir parametre kombinasyonu için 5-Fold CV ile Macro-F1 skorunu ölçer.
+DEFAULT_OUTPUT = os.path.join(PROJECT_ROOT, "outputs", "lgbm_tuning_grouped.csv")
+DEFAULT_WORKSPACE = os.path.join(PROJECT_ROOT, "outputs", "tuning_workspace")
 
-    Parametreler
-    ----------
-    X : pd.DataFrame
-        Feature matrisi.
-    y : pd.Series
-        Etiketler.
-    num_leaves, learning_rate, min_child_samples : scalar
-        Denenecek LightGBM parametreleri.
 
-    Döndürür
-    -------
-    dict
-        Deney sonuçları.
-    """
-    params = {
-        **BASE_PARAMS,
-        "num_leaves"       : num_leaves,
-        "learning_rate"    : learning_rate,
-        "min_child_samples": min_child_samples,
-    }
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Grouped LightGBM tuning on test-shaped candidates"
+    )
+    parser.add_argument("--sample-terms", type=int, default=300)
+    parser.add_argument("--num-leaves", nargs="+", type=int, default=[31, 63, 127])
+    parser.add_argument(
+        "--learning-rates", nargs="+", type=float, default=[0.02, 0.04, 0.08]
+    )
+    parser.add_argument(
+        "--min-child-samples", nargs="+", type=int, default=[50, 100, 200]
+    )
+    parser.add_argument("--num-boost-round", type=int, default=800)
+    parser.add_argument("--early-stopping-rounds", type=int, default=60)
+    parser.add_argument("--workspace", default=DEFAULT_WORKSPACE)
+    parser.add_argument("--output", default=DEFAULT_OUTPUT)
+    return parser.parse_args(argv)
 
-    skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
-    scores    = []
-    oof_preds = np.zeros(len(X))
 
-    for fold, (tr_idx, val_idx) in enumerate(
-        skf.split(X, y, groups=groups), start=1
-    ):
-        X_tr, X_val = X.iloc[tr_idx], X.iloc[val_idx]
-        y_tr, y_val = y.iloc[tr_idx], y.iloc[val_idx]
-
-        dtrain = lgb.Dataset(X_tr, label=y_tr)
-        dval   = lgb.Dataset(X_val, label=y_val)
-
-        model = lgb.train(
-            params, dtrain,
-            num_boost_round=500,
-            valid_sets=[dval],
-            callbacks=[
-                lgb.early_stopping(30, verbose=False),
-                lgb.log_evaluation(period=-1),
-            ]
+def evaluate_parameters(data, params, num_boost_round, early_stopping_rounds):
+    """Train deterministic folds and return leakage-free threshold metrics."""
+    X = data["X"]
+    y = data["y"]
+    fold_ids = data["fold_ids"]
+    oof = np.zeros(len(y), dtype=np.float32)
+    iterations = []
+    for fold in np.unique(fold_ids):
+        train_index = np.flatnonzero(fold_ids != fold)
+        validation_index = np.flatnonzero(fold_ids == fold)
+        train_data = lgb.Dataset(X.iloc[train_index], label=y[train_index])
+        validation_data = lgb.Dataset(
+            X.iloc[validation_index],
+            label=y[validation_index],
+            reference=train_data,
         )
-
-        val_proba = model.predict(X_val)
-        oof_preds[val_idx] = val_proba
-        scores.append(macro_f1_from_proba(y_val, val_proba, threshold=0.5))
-
-    mean_f1 = float(np.mean(scores))
-    std_f1  = float(np.std(scores))
-    best_thresh, best_f1, _ = find_best_threshold(y.values, oof_preds)
-
+        model = lgb.train(
+            params,
+            train_data,
+            num_boost_round=num_boost_round,
+            valid_sets=[validation_data],
+            callbacks=[
+                lgb.early_stopping(early_stopping_rounds, verbose=False),
+                lgb.log_evaluation(period=0),
+            ],
+        )
+        oof[validation_index] = model.predict(
+            X.iloc[validation_index], num_iteration=model.best_iteration
+        )
+        iterations.append(model.best_iteration)
+    report = cross_fitted_threshold_evaluation(y, oof, fold_ids)
     return {
-        "num_leaves"       : num_leaves,
-        "learning_rate"    : learning_rate,
-        "min_child_samples": min_child_samples,
-        "mean_f1"          : round(mean_f1, 4),
-        "std_f1"           : round(std_f1, 4),
-        "best_threshold"   : best_thresh,
-        "best_f1"          : round(best_f1, 4),
+        "cross_fitted_macro_f1": report["cross_fitted_macro_f1"],
+        "fold_macro_f1_mean": report["fold_macro_f1_mean"],
+        "fold_macro_f1_std": report["fold_macro_f1_std"],
+        "deploy_threshold": report["deploy_threshold"],
+        "all_oof_selection_macro_f1": report["all_oof_selection_macro_f1"],
+        "mean_best_iteration": float(np.mean(iterations)),
     }
+
+
+def _atomic_write_frame(frame, path):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = path + ".tmp"
+    frame.to_csv(temporary_path, index=False)
+    os.replace(temporary_path, path)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.sample_terms < 5:
+        raise ValueError("--sample-terms must be at least 5")
+    if (
+        any(value <= 1 for value in args.num_leaves)
+        or any(value <= 0 for value in args.learning_rates)
+        or any(value <= 0 for value in args.min_child_samples)
+        or args.num_boost_round <= 0
+        or args.early_stopping_rounds <= 0
+    ):
+        raise ValueError("all tuning parameters must be positive")
+    os.makedirs(args.workspace, exist_ok=True)
+    training_args = SimpleNamespace(
+        num_boost_round=args.num_boost_round,
+        early_stopping_rounds=args.early_stopping_rounds,
+    )
+    data = prepare_training_data(training_args, args.workspace, args.sample_terms)
+    rows = []
+    grid = list(
+        itertools.product(
+            args.num_leaves,
+            args.learning_rates,
+            args.min_child_samples,
+        )
+    )
+    for index, (num_leaves, learning_rate, min_child_samples) in enumerate(
+        grid, start=1
+    ):
+        print(
+            f"[{index}/{len(grid)}] leaves={num_leaves} lr={learning_rate} "
+            f"min_child={min_child_samples}"
+        )
+        params = {
+            **LGBM_PARAMS,
+            "num_leaves": num_leaves,
+            "learning_rate": learning_rate,
+            "min_child_samples": min_child_samples,
+        }
+        result = evaluate_parameters(
+            data, params, args.num_boost_round, args.early_stopping_rounds
+        )
+        rows.append(
+            {
+                "num_leaves": num_leaves,
+                "learning_rate": learning_rate,
+                "min_child_samples": min_child_samples,
+                **result,
+            }
+        )
+    results = pd.DataFrame(rows).sort_values(
+        ["cross_fitted_macro_f1", "fold_macro_f1_std"],
+        ascending=[False, True],
+    )
+    _atomic_write_frame(results, args.output)
+    print(results.to_string(index=False))
+    print(f"tuning={args.output}")
+    return args.output
 
 
 if __name__ == "__main__":
-    total = (
-        len(PARAM_GRID["num_leaves"])
-        * len(PARAM_GRID["learning_rate"])
-        * len(PARAM_GRID["min_child_samples"])
-    )
-    print("=" * 60)
-    print("  G.G.A - LightGBM Hiperparametre Tuning (8 Temmuz)")
-    print(f"  Toplam deney: {total}")
-    print("=" * 60)
-
-    # --- Veri hazırlama ---
-    print("\n[1/3] Veri yukleniyor...")
-    terms_df = load_terms(os.path.join(DATA_DIR, "terms.csv"))
-    items_df  = load_items(os.path.join(DATA_DIR, "items.csv"))
-    train_raw = pd.read_csv(
-        os.path.join(DATA_DIR, "training_pairs.csv"),
-        dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
-    )
-
-    print(f"[2/3] {SAMPLE_POS} poz ornek ile egitim seti hazirlaniyor...")
-    pos_sample = train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED)
-    full_train = build_training_set(
-        pos_sample, items_df, ratio=NEG_RATIO,
-        random_state=RANDOM_SEED, verbose=False,
-        positive_reference_df=train_raw,
-    )
-    merged = full_train.merge(terms_df, on="term_id", how="left")
-    merged = merged.merge(items_df,  on="item_id",  how="left")
-    merged = build_features(merged)
-
-    X = merged[FEATURE_COLS]
-    y = merged["label"]
-    groups = merged["term_id"]
-    print(f"  Egitim seti: {len(merged):,} satir, {len(FEATURE_COLS)} feature")
-
-    # --- Grid search ---
-    print("\n[3/3] Grid search basliyor...")
-    results = []
-    combos = list(itertools.product(
-        PARAM_GRID["num_leaves"],
-        PARAM_GRID["learning_rate"],
-        PARAM_GRID["min_child_samples"],
-    ))
-
-    for i, (nl, lr, mcs) in enumerate(combos, start=1):
-        print(
-            f"  [{i:02d}/{total}] "
-            f"num_leaves={nl}, lr={lr}, min_child={mcs} ...",
-            end=" ", flush=True
-        )
-        result = run_single_experiment(X, y, groups, nl, lr, mcs)
-        results.append(result)
-        print(f"mean_F1={result['mean_f1']:.4f}  best={result['best_f1']:.4f}")
-
-    # --- Sonuçlar ---
-    df = pd.DataFrame(results).sort_values("best_f1", ascending=False)
-
-    print("\n" + "=" * 60)
-    print("  SONUCLAR (Best F1'e gore sirali)")
-    print("=" * 60)
-    print(df.to_string(index=False))
-
-    # En iyi 3
-    print("\n  En iyi 3 kombinasyon:")
-    for rank, (_, row) in enumerate(df.head(3).iterrows(), start=1):
-        print(
-            f"  {rank}. num_leaves={row['num_leaves']}, "
-            f"lr={row['learning_rate']}, min_child={row['min_child_samples']} "
-            f"-> best_F1={row['best_f1']:.4f}"
-        )
-
-    best = df.iloc[0]
-    print(f"\n  ONERI: num_leaves={best['num_leaves']}, "
-          f"learning_rate={best['learning_rate']}, "
-          f"min_child_samples={best['min_child_samples']}")
-
-    out_path = os.path.join(OUTPUT_DIR, "lgbm_tuning_sonuclari.csv")
-    df.to_csv(out_path, index=False)
-    print(f"\n  Sonuclar kaydedildi: {out_path}")
-    print("=" * 60)
+    main()

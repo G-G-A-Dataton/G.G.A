@@ -18,9 +18,10 @@ All scores recorded before the current contracts remain historical only. They us
 
 ## Verified Runs
 
-- Unit/integration suite: 77 passing tests.
+- Unit/integration suite: 78 passing tests.
 - Canonical training smoke: 20 complete terms, 2,396 candidates, five folds, artifact manifest generated.
 - Shortlist smoke: 10 complete terms, five LightGBM + five XGBoost folds, 200 test rows, valid OOF manifest and submission.
+- Medium shortlist acceptance: 300 complete terms, 33,048 candidates, ten models, 50,000 test rows, and a QA-passing selected submission.
 - BM25 smoke: 20,000 catalog items in 2.71 seconds, approximately 140 MB peak RSS.
 
 Smoke scores are pipeline acceptance evidence only. They are too small for model selection or leaderboard projection.

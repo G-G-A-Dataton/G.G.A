@@ -29,7 +29,7 @@ import pandas as pd
 # 1. OOF Tahminlerinden Hataları Ayır
 # ─────────────────────────────────────────────────────────────────────────────
 
-def split_errors(df, oof_preds, threshold=0.5):
+def split_errors(df, oof_preds, threshold=0.5, predictions=None):
     """
     OOF (Out-Of-Fold) tahminlerini kullanarak doğru ve yanlış sınıflandırmaları ayırır.
 
@@ -61,21 +61,29 @@ def split_errors(df, oof_preds, threshold=0.5):
         or ((oof_preds < 0) | (oof_preds > 1)).any()
     ):
         raise ValueError("oof_preds must be aligned finite probabilities in [0, 1]")
-    try:
-        threshold_value = float(threshold)
-    except (TypeError, ValueError):
-        threshold_value = np.nan
-    if isinstance(threshold, bool) or not np.isfinite(threshold_value) or not (
-        0 <= threshold_value <= 1
-    ):
-        raise ValueError("threshold must be a finite scalar in [0, 1]")
-    threshold = threshold_value
+    if predictions is None:
+        try:
+            threshold_value = float(threshold)
+        except (TypeError, ValueError):
+            threshold_value = np.nan
+        if isinstance(threshold, bool) or not np.isfinite(threshold_value) or not (
+            0 <= threshold_value <= 1
+        ):
+            raise ValueError("threshold must be a finite scalar in [0, 1]")
+        predictions = (oof_preds >= threshold_value).astype(np.int8)
+    else:
+        predictions = np.asarray(predictions)
+        if predictions.shape != oof_preds.shape or not np.isin(
+            predictions, [0, 1]
+        ).all():
+            raise ValueError("predictions must be aligned binary values")
+        predictions = predictions.astype(np.int8, copy=False)
     y = df["label"].to_numpy()
     if not np.isin(y, [0, 1]).all():
         raise ValueError("label must be binary")
 
     # Olasılık tahminini binary'e çevir
-    preds = (oof_preds >= threshold).astype(int)
+    preds = predictions
 
     # Her kategoriyi bir boolean mask olarak tanımla
     # Gerçekte 0, model 1 dedi → False Positive (aşırı geniş tahmin)
@@ -217,7 +225,9 @@ def find_hard_cases(fp_df, fn_df, n=10):
 # 3. Ana Rapor Üreticisi
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_error_report(df, oof_preds, threshold=0.5, output_path=None):
+def generate_error_report(
+    df, oof_preds, threshold=0.5, output_path=None, predictions=None
+):
     """
     Tam hata analizi raporu üretir ve opsiyonel olarak dosyaya kaydeder.
 
@@ -237,7 +247,9 @@ def generate_error_report(df, oof_preds, threshold=0.5, output_path=None):
     print("=" * 60)
 
     # Hataları ayır
-    fp_df, fn_df, tp_df, tn_df = split_errors(df, oof_preds, threshold)
+    fp_df, fn_df, tp_df, tn_df = split_errors(
+        df, oof_preds, threshold, predictions=predictions
+    )
 
     n = len(df)
     print(f"\n  Toplam ornek       : {n:,}")

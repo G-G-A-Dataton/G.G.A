@@ -18,12 +18,15 @@
 
 ## Measured Acceptance Runs
 
-- 77 regression/integration tests passed.
+- 78 regression/integration tests passed.
 - Full data freeze verification passed for 5 files and 3,359,679 submission rows.
 - Environment verification passed for Python 3.13.5 and 17 pinned packages.
 - Canonical 20-term training smoke generated 2,396 candidates and five model folds.
 - Ten-term dual-model shortlist generated all 10 models, OOF/fold arrays, 200 predictions, and a QA-passing sample submission.
 - Compact BM25 indexed 20,000 real products in 2.71 seconds at about 140 MB peak RSS.
+- Medium shortlist acceptance used 300 complete terms, 33,048 candidates, ten models, and 50,000 QA-passing predictions in 2:08.17 at about 1.46 GB peak RSS.
+
+Detailed measurements are recorded in `docs/acceptance_runs.md`; plan-to-evidence mapping is recorded in `docs/july_15_task_audit.md`.
 
 ## Explicitly Pending Runtime Evidence
 

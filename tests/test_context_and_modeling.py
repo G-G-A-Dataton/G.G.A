@@ -9,6 +9,7 @@ from src.modeling import (
     cross_fitted_ensemble_evaluation,
     cross_fitted_threshold_evaluation,
     predictions_from_cross_fitted_selection,
+    predictions_from_threshold_report,
     select_cross_fitted_candidate,
 )
 
@@ -53,6 +54,10 @@ class ModelingEvaluationTests(unittest.TestCase):
         self.assertEqual(report["cross_fitted_macro_f1"], 1.0)
         self.assertEqual(len(report["folds"]), 3)
         self.assertIn("all_oof_selection_macro_f1", report)
+        predictions = predictions_from_threshold_report(
+            self.first, fold_ids, report
+        )
+        self.assertTrue(np.array_equal(predictions, self.y))
 
     def test_ensemble_tuning_is_cross_fitted(self):
         fold_ids = build_group_fold_ids(self.y, self.groups, n_splits=3)

@@ -8,7 +8,7 @@ This is the canonical offline-capable workflow. Run commands from the repository
 python scripts/run_production.py --stage verify
 ```
 
-The gate runs 77 regression tests, verifies every pinned package, checks the versioned data freeze in `configs/final_v1.json`, and validates all CSV relationships. Any mismatch stops the run.
+The gate runs 78 regression tests, verifies every pinned package, checks the versioned data freeze in `configs/final_v1.json`, and validates all CSV relationships. Any mismatch stops the run.
 
 ## 2. Production Training
 

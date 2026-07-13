@@ -29,6 +29,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.data              import load_terms, load_items
+from src.candidate_sampling import sample_complete_terms
 from src.negative_sampling import build_training_set
 from src.tfidf_features    import build_tfidf_vectorizer, compute_tfidf_cosine_batch
 
@@ -43,7 +44,7 @@ MAX_FEATURES  = [10_000, 30_000, 50_000]  # Kelime dağarcığı boyutu
 MIN_DFS       = [1, 2, 5]                 # En az kaç belgede geçmeli
 
 # Deney boyutu (hız için küçük tutuyoruz)
-SAMPLE_POS  = 1_000   # Kaç pozitif çift kullanılacak
+SAMPLE_TERMS = 100    # Sorgular kısmi pozitif gruplara bölünmez
 NEG_RATIO   = 1       # Hız için 1:1
 RANDOM_SEED = 42
 
@@ -139,9 +140,15 @@ if __name__ == "__main__":
     )
 
     # Küçük örnek eğitim seti oluştur
-    print(f"[2/3] {SAMPLE_POS} pozitif + {SAMPLE_POS*NEG_RATIO} negatif ornek hazirlaniyor...")
+    selected = sample_complete_terms(
+        train_raw, SAMPLE_TERMS, random_state=RANDOM_SEED
+    )
+    print(
+        f"[2/3] {SAMPLE_TERMS} tam sorgu grubu, {len(selected)} pozitif ve "
+        f"{len(selected) * NEG_RATIO} negatif hazirlaniyor..."
+    )
     sample = build_training_set(
-        train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED),
+        selected,
         items_df, ratio=NEG_RATIO, random_state=RANDOM_SEED, verbose=False,
         positive_reference_df=train_raw,
     )
@@ -166,16 +173,13 @@ if __name__ == "__main__":
         itertools.product(NGRAM_RANGES, MAX_FEATURES, MIN_DFS), start=1
     ):
         print(f"  [{i:02d}/{total}] ngram={ngram}, max_feat={maxf:,}, min_df={mindf} ...", end=" ", flush=True)
-        try:
-            result = eval_tfidf_params(
-                query_texts, item_texts, labels,
-                terms_df, items_df,
-                ngram_range=ngram, max_features=maxf, min_df=mindf
-            )
-            results.append(result)
-            print(f"separation={result['separation']:.4f}  [{result['train_sec']}s eğit]")
-        except Exception as e:
-            print(f"HATA: {e}")
+        result = eval_tfidf_params(
+            query_texts, item_texts, labels,
+            terms_df, items_df,
+            ngram_range=ngram, max_features=maxf, min_df=mindf
+        )
+        results.append(result)
+        print(f"separation={result['separation']:.4f}  [{result['train_sec']}s eğit]")
 
     # ─── 3. Sonuçları sırala ve göster ───────────────────────────────────────
     results_df = pd.DataFrame(results).sort_values("separation", ascending=False)
@@ -202,6 +206,8 @@ if __name__ == "__main__":
 
     # CSV olarak kaydet
     out_path = os.path.join(OUTPUT_DIR, "tfidf_deney_sonuclari.csv")
-    results_df.to_csv(out_path, index=False)
+    temporary_path = out_path + ".tmp"
+    results_df.to_csv(temporary_path, index=False)
+    os.replace(temporary_path, out_path)
     print(f"\n  Sonuclar kaydedildi: {out_path}")
     print("=" * 65)

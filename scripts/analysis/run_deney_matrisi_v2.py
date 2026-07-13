@@ -84,6 +84,12 @@ def parse_args(argv=None):
     )
     parser.add_argument("--sample-terms", type=int, default=100)
     parser.add_argument("--ratios", nargs="+", type=int, default=[1, 2, 3, 5])
+    parser.add_argument(
+        "--feature-sets",
+        nargs="+",
+        choices=sorted(FEATURE_SETS),
+        default=list(FEATURE_SETS),
+    )
     parser.add_argument("--num-boost-round", type=int, default=500)
     parser.add_argument("--early-stopping-rounds", type=int, default=50)
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
@@ -231,7 +237,7 @@ def main(argv=None):
     }
 
     rows = []
-    experiments = list(itertools.product(datasets, FEATURE_SETS))
+    experiments = list(itertools.product(datasets, args.feature_sets))
     for index, (ratio, feature_set) in enumerate(experiments, start=1):
         print(
             f"[{index}/{len(experiments)}] ratio={ratio}:1 "

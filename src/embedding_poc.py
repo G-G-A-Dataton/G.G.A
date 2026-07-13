@@ -129,7 +129,7 @@ def compute_cosine_similarities(query_embs, item_embs):
     return np.einsum("nd,nd->n", query_embs, item_embs)
 
 
-def run_poc(n_samples=200, batch_size=32):
+def run_poc(n_terms=20, batch_size=32):
     """
     Küçük bir veri seti üzerinde embedding PoC çalıştırır.
 
@@ -140,12 +140,13 @@ def run_poc(n_samples=200, batch_size=32):
 
     Parametreler
     ----------
-    n_samples : int
-        Test için kullanılacak çift sayısı.
+    n_terms : int
+        Test için kullanılacak tam sorgu grubu sayısı.
     batch_size : int
         Encoding batch boyutu.
     """
     from src.data              import load_terms, load_items
+    from src.candidate_sampling import sample_complete_terms
     from src.negative_sampling import build_training_set
 
     DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
@@ -160,7 +161,9 @@ def run_poc(n_samples=200, batch_size=32):
     model = load_model()
 
     # 2. Küçük veri seti hazırla
-    print(f"\n[1/4] Veri hazirlaniyor ({n_samples} poz + {n_samples} neg)...")
+    if n_terms < 1:
+        raise ValueError("n_terms must be positive")
+    print(f"\n[1/4] Veri hazirlaniyor ({n_terms} tam sorgu grubu)...")
     terms_df = load_terms(os.path.join(DATA_DIR, "terms.csv"))
     items_df  = load_items(os.path.join(DATA_DIR, "items.csv"))
     train_raw = pd.read_csv(
@@ -168,7 +171,7 @@ def run_poc(n_samples=200, batch_size=32):
         dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
     )
 
-    pos_sample = train_raw.sample(n=n_samples, random_state=SEED)
+    pos_sample = sample_complete_terms(train_raw, n_terms, random_state=SEED)
     full_set   = build_training_set(
         pos_sample, items_df, ratio=1,
         random_state=SEED, verbose=False,
@@ -239,7 +242,7 @@ def run_poc(n_samples=200, batch_size=32):
 
 
 if __name__ == "__main__":
-    result = run_poc(n_samples=200, batch_size=32)
+    result = run_poc(n_terms=20, batch_size=32)
     print("\n[embedding_poc] Tamamlandi.")
     print(f"  Separation: {result['separation']}")
     print(f"  Hiz: {result['speed_per_s']} metin/s")

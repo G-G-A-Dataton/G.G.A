@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.analysis.run_ensemble_comparison import build_comparison
+from scripts.analysis.run_feature_importance import aggregate_importance
 from scripts.analysis.run_hata_taksonomisi import classify_error_signals
 from scripts.analysis.run_threshold_analysis import analyze_thresholds
 from src.error_analysis import split_errors
@@ -11,6 +12,25 @@ from src.modeling import select_cross_fitted_candidate
 
 
 class AnalysisContractTests(unittest.TestCase):
+    def test_feature_importance_aggregates_verified_fold_shapes(self):
+        class FakeModel:
+            def __init__(self, gain, split):
+                self.gain = np.asarray(gain)
+                self.split = np.asarray(split)
+
+            def feature_name(self):
+                return ["a", "b"]
+
+            def feature_importance(self, importance_type):
+                return self.gain if importance_type == "gain" else self.split
+
+        result = aggregate_importance(
+            [FakeModel([3, 1], [2, 1]), FakeModel([1, 1], [1, 1])],
+            ["a", "b"],
+        )
+        self.assertEqual(result["feature"].tolist(), ["a", "b"])
+        self.assertAlmostEqual(result["gain_ratio"].sum(), 1.0)
+
     def test_threshold_diagnostics_include_both_classes(self):
         result = analyze_thresholds(
             np.array([0, 0, 1, 1]),
