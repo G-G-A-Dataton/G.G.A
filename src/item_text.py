@@ -16,7 +16,7 @@ Neden standardize?
     title     = "Adidas Erkek Kosu Ayakkabisi"     (kısa, bazen model kodu)
     category  = "ayakkabi/spor ayakkabisi/koscu"    (/ ile ayrılmış hiyerarşi)
     brand     = "adidas"                            (marka)
-    attributes= "{'Renk': 'Siyah', 'Numara': '42'}"  (JSON)
+    attributes= "renk: siyah, numara: 42"              (düz anahtar/değer)
   Bunlar birleştirilirse: zengin ve kapsamlı bir metin elde edilir.
 
 Üretilen metin formatı:
@@ -26,9 +26,9 @@ Neden standardize?
 """
 
 import re
-import ast
 import pandas as pd
-import numpy as np
+
+from src.attributes import parse_attributes
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ def flatten_category(category):
 
 def parse_attributes_flat(attributes_str):
     """
-    Attributes JSON'ını düz metin haline getirir.
+    Attributes düz metnini veya JSON/dict metnini tek metin haline getirir.
 
     Giriş : "{'Renk': 'Siyah', 'Numara': '42'}"
     Çıkış : "renk siyah numara 42"
@@ -63,17 +63,9 @@ def parse_attributes_flat(attributes_str):
     if not isinstance(attributes_str, str) or not attributes_str.strip():
         return ""
 
-    try:
-        # Python dict string → dict
-        d = ast.literal_eval(attributes_str)
-        if not isinstance(d, dict):
-            return ""
-    except Exception:
-        try:
-            import json
-            d = json.loads(attributes_str)
-        except Exception:
-            return ""
+    d = parse_attributes(attributes_str)
+    if not d:
+        return ""
 
     # Her anahtar-değer çiftini birleştir: "renk siyah"
     parts = []
@@ -108,6 +100,25 @@ def clean_text(text):
 # 2. Ana Standardizasyon Fonksiyonu
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _combine_item_text(title, brand, category, attributes, include_attrs):
+    title = title if isinstance(title, str) else ""
+    brand = brand if isinstance(brand, str) else ""
+    category = category if isinstance(category, str) else ""
+    attributes = attributes if isinstance(attributes, str) else ""
+
+    parts = [title] if title else []
+    if brand and brand.casefold() not in title.casefold():
+        parts.append(brand)
+    category_flat = flatten_category(category)
+    if category_flat:
+        parts.append(category_flat)
+    if include_attrs:
+        attributes_flat = parse_attributes_flat(attributes)
+        if attributes_flat:
+            parts.append(attributes_flat)
+    return clean_text(" ".join(parts))
+
+
 def build_item_text(row, include_attrs=True):
     """
     Tek bir ürün satırından standart metin üretir.
@@ -131,34 +142,13 @@ def build_item_text(row, include_attrs=True):
     str
         Birleştirilmiş ve temizlenmiş ürün metni.
     """
-    parts = []
-
-    # Title — en ağırlıklı bileşen
-    title = str(row.get("title", "") or "")
-    if title:
-        parts.append(title)
-
-    # Marka — title'da zaten geçiyor olabilir ama tekrarlama TF-IDF ağırlığını artırır
-    brand = str(row.get("brand", "") or "")
-    if brand and brand.lower() not in title.lower():
-        parts.append(brand)
-
-    # Kategori — hiyerarşi düzleştirilmiş
-    category = str(row.get("category", "") or "")
-    cat_flat = flatten_category(category)
-    if cat_flat:
-        parts.append(cat_flat)
-
-    # Attributes — isteğe bağlı (hız/zenginlik dengesi)
-    if include_attrs:
-        attrs_str = str(row.get("attributes", "") or "")
-        attrs_flat = parse_attributes_flat(attrs_str)
-        if attrs_flat:
-            parts.append(attrs_flat)
-
-    # Hepsini birleştir ve temizle
-    combined = " ".join(parts)
-    return clean_text(combined)
+    return _combine_item_text(
+        row.get("title", ""),
+        row.get("brand", ""),
+        row.get("category", ""),
+        row.get("attributes", ""),
+        include_attrs,
+    )
 
 
 def add_item_text_column(items_df, include_attrs=True, col_name="item_text"):
@@ -184,9 +174,15 @@ def add_item_text_column(items_df, include_attrs=True, col_name="item_text"):
     """
     print(f"[item_text] {len(items_df):,} urun icin metin standardize ediliyor...")
     out = items_df.copy()
-    out[col_name] = out.apply(
-        lambda r: build_item_text(r, include_attrs=include_attrs), axis=1
-    )
+    for column in ("title", "brand", "category", "attributes"):
+        if column not in out.columns:
+            out[column] = ""
+    out[col_name] = [
+        _combine_item_text(title, brand, category, attributes, include_attrs)
+        for title, brand, category, attributes in zip(
+            out["title"], out["brand"], out["category"], out["attributes"]
+        )
+    ]
     n_empty = (out[col_name] == "").sum()
     print(f"[item_text] Tamamlandi. Bos metin sayisi: {n_empty}")
     return out

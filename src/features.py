@@ -36,9 +36,24 @@ güçlü overlap (örtüşme) yöntemleri kullanır.
 """
 
 import pandas as pd
-import numpy as np
 
 from src.attributes import add_attribute_features, ATTRIBUTE_FEATURE_COLS
+from src.text_utils import contains_phrase, find_phrase_values
+
+
+_QUERY_GENDER_KEYWORDS = {
+    "kadın": "kadın", "bayan": "kadın", "women": "kadın",
+    "kız": "kadın", "girl": "kadın", "erkek": "erkek",
+    "bay": "erkek", "men": "erkek", "boy": "erkek",
+}
+_ITEM_GENDER_KEYWORDS = {"kadın": "kadın", "erkek": "erkek"}
+_AGE_KEYWORDS = {
+    "bebek": "bebek", "baby": "bebek", "infant": "bebek",
+    "çocuk": "çocuk", "cocuk": "çocuk", "kids": "çocuk",
+    "kid": "çocuk", "child": "çocuk", "genç": "genç",
+    "genc": "genç", "teen": "genç", "junior": "genç",
+    "yetişkin": "yetişkin", "yetiskin": "yetişkin", "adult": "yetişkin",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,8 +94,14 @@ def jaccard_overlap(text1, text2):
     if not tokens1 or not tokens2:
         return 0.0
 
-    intersection = tokens1 & tokens2   # Her iki sette de olanlar
-    union        = tokens1 | tokens2   # En az birinde olanlar
+    return _jaccard_token_sets(tokens1, tokens2)
+
+
+def _jaccard_token_sets(tokens1, tokens2):
+    if not tokens1 or not tokens2:
+        return 0.0
+    intersection = tokens1 & tokens2
+    union = tokens1 | tokens2
     return len(intersection) / len(union)
 
 
@@ -139,7 +160,7 @@ def compute_query_brand_match(query, brand):
     if not brand.strip():
         return 0
     # Marka adı sorgu içinde tam kelime olarak geçiyor mu?
-    return 1 if brand.lower() in query.lower() else 0
+    return int(contains_phrase(query, brand))
 
 
 def compute_query_cat_l1_overlap(query, category):
@@ -172,28 +193,23 @@ def compute_gender_match(query, gender):
     if not isinstance(query, str):
         return 0
 
-    query_lower  = query.lower()
     gender_lower = str(gender).lower() if pd.notna(gender) else "unknown"
 
     # Sorgu metninde hangi cinsiyet sinyali var?
-    query_has_kadin = any(k in query_lower for k in ["kadın", "bayan", "women", "kız", "girl"])
-    query_has_erkek = any(k in query_lower for k in ["erkek", "bay", "men", "boy"])
+    query_groups = find_phrase_values(query, _QUERY_GENDER_KEYWORDS)
+    query_has_kadin = "kadın" in query_groups
+    query_has_erkek = "erkek" in query_groups
 
     # Ürünün etiketi ne?
-    item_kadin  = "kadın" in gender_lower
-    item_erkek  = "erkek" in gender_lower
-    item_belli  = gender_lower not in ("unknown", "unisex")
+    item_groups = find_phrase_values(gender_lower, _ITEM_GENDER_KEYWORDS)
+    item_kadin = "kadın" in item_groups
+    item_erkek = "erkek" in item_groups
+
+    if query_has_kadin == query_has_erkek or item_kadin == item_erkek:
+        return 0
 
     # Değerlendirme mantığı
-    if query_has_kadin and item_kadin:
-        return 1   # Sorgu kadın, ürün kadın → uyumlu
-    if query_has_erkek and item_erkek:
-        return 1   # Sorgu erkek, ürün erkek → uyumlu
-    if query_has_kadin and item_erkek and item_belli:
-        return -1  # Sorgu kadın, ürün erkek → çelişki!
-    if query_has_erkek and item_kadin and item_belli:
-        return -1  # Sorgu erkek, ürün kadın → çelişki!
-    return 0       # Belirsiz durum
+    return 1 if query_has_kadin == item_kadin else -1
 
 
 def compute_age_group_match(query, age_group):
@@ -211,38 +227,18 @@ def compute_age_group_match(query, age_group):
     if not isinstance(query, str):
         return 0
 
-    query_lower    = query.lower()
     age_group_lower = str(age_group).lower() if pd.notna(age_group) else "unknown"
 
     # Sorgudaki yaş grubu sinyalleri
     # Her anahtar kelime hangi kategoriye işaret ediyor?
-    query_has_bebek  = any(k in query_lower for k in ["bebek", "baby", "infant"])
-    query_has_cocuk  = any(k in query_lower for k in ["çocuk", "cocuk", "kids", "kid", "child"])
-    query_has_genc   = any(k in query_lower for k in ["genç", "genc", "teen", "junior"])
-    query_has_yetis  = any(k in query_lower for k in ["yetişkin", "yetiskin", "adult"])
+    query_groups = find_phrase_values(query, _AGE_KEYWORDS)
 
     # Ürünün yaş grubu etiketi
-    item_bebek  = "bebek" in age_group_lower
-    item_cocuk  = "çocuk" in age_group_lower or "cocuk" in age_group_lower
-    item_genc   = "genç" in age_group_lower   or "genc" in age_group_lower
-    item_yetis  = "yetişkin" in age_group_lower or "yetiskin" in age_group_lower
-    item_belli  = age_group_lower not in ("unknown",)
+    item_groups = find_phrase_values(age_group_lower, _AGE_KEYWORDS)
 
-    # Uyumlu mu, çelişkili mi?
-    if query_has_bebek:
-        if item_bebek: return 1
-        if item_belli and not item_bebek: return -1
-    if query_has_cocuk:
-        if item_cocuk: return 1
-        if item_belli and not item_cocuk and not item_bebek: return -1
-    if query_has_genc:
-        if item_genc: return 1
-        if item_belli and not item_genc: return -1
-    if query_has_yetis:
-        if item_yetis: return 1
-        if item_belli and not item_yetis: return -1
-
-    return 0  # Belirsiz
+    if not query_groups or not item_groups:
+        return 0
+    return 1 if query_groups & item_groups else -1
 
 
 def compute_demographic_conflict(gender_match_val, age_group_match_val):
@@ -361,26 +357,64 @@ def build_features(df):
     """
     # Değiştirmemek için kopya alıyoruz
     out = df.copy()
+    required = {"query", "title", "category", "brand"}
+    missing = sorted(required - set(out.columns))
+    if missing:
+        raise ValueError(f"Feature input is missing required columns: {missing}")
+    if "gender" not in out.columns:
+        out["gender"] = "unknown"
+    if "age_group" not in out.columns:
+        out["age_group"] = "unknown"
+
+    queries = out["query"].tolist()
+    titles = out["title"].tolist()
+    categories = out["category"].tolist()
+    brands = out["brand"].tolist()
+
+    query_token_cache = {}
+    query_tokens = []
+    for query in queries:
+        key = query if isinstance(query, str) else None
+        if key not in query_token_cache:
+            query_token_cache[key] = tokenize(query)
+        query_tokens.append(query_token_cache[key])
+
+    category_cache = {}
+    category_values = []
+    for category in categories:
+        key = category if isinstance(category, str) else None
+        if key not in category_cache:
+            levels = split_category_levels(category)
+            flat = category.replace("/", " ") if isinstance(category, str) else ""
+            category_cache[key] = (
+                tokenize(flat), tokenize(levels[0]), tokenize(levels[1]),
+                tokenize(levels[2]), levels[3],
+            )
+        category_values.append(category_cache[key])
 
     print("[features] query_title_overlap hesaplanıyor...")
-    out["query_title_overlap"] = out.apply(
-        lambda r: compute_query_title_overlap(r["query"], r["title"]), axis=1
-    )
+    out["query_title_overlap"] = [
+        _jaccard_token_sets(tokens, tokenize(title))
+        for tokens, title in zip(query_tokens, titles)
+    ]
 
     print("[features] query_category_overlap hesaplanıyor...")
-    out["query_category_overlap"] = out.apply(
-        lambda r: compute_query_category_overlap(r["query"], r["category"]), axis=1
-    )
+    out["query_category_overlap"] = [
+        _jaccard_token_sets(tokens, category_value[0])
+        for tokens, category_value in zip(query_tokens, category_values)
+    ]
 
     print("[features] query_brand_match hesaplanıyor...")
-    out["query_brand_match"] = out.apply(
-        lambda r: compute_query_brand_match(r["query"], r["brand"]), axis=1
-    )
+    out["query_brand_match"] = [
+        compute_query_brand_match(query, brand)
+        for query, brand in zip(queries, brands)
+    ]
 
     print("[features] query_cat_l1_overlap hesaplanıyor...")
-    out["query_cat_l1_overlap"] = out.apply(
-        lambda r: compute_query_cat_l1_overlap(r["query"], r["category"]), axis=1
-    )
+    out["query_cat_l1_overlap"] = [
+        _jaccard_token_sets(tokens, category_value[1])
+        for tokens, category_value in zip(query_tokens, category_values)
+    ]
 
     print("[features] title_len ve query_len hesaplanıyor...")
     # Kısa ürün başlıkları (örn. sadece model numarası) anlamlı sinyal vermez
@@ -388,21 +422,23 @@ def build_features(df):
     out["query_len"] = out["query"].fillna("").str.len()
 
     print("[features] gender_match hesaplanıyor...")
-    out["gender_match"] = out.apply(
-        lambda r: compute_gender_match(r["query"], r.get("gender", "unknown")), axis=1
-    )
+    out["gender_match"] = [
+        compute_gender_match(query, gender)
+        for query, gender in zip(queries, out["gender"])
+    ]
 
     # ── 4 Temmuz: Demografik feature'lar ──────────────────────────────────────
     print("[features] age_group_match hesaplanıyor...")
-    out["age_group_match"] = out.apply(
-        lambda r: compute_age_group_match(r["query"], r.get("age_group", "unknown")), axis=1
-    )
+    out["age_group_match"] = [
+        compute_age_group_match(query, age_group)
+        for query, age_group in zip(queries, out["age_group"])
+    ]
 
     print("[features] demographic_conflict hesaplanıyor...")
     # gender_match ve age_group_match hesaplandıktan SONRA çalıştırılmalı
-    out["demographic_conflict"] = out.apply(
-        lambda r: compute_demographic_conflict(r["gender_match"], r["age_group_match"]), axis=1
-    )
+    out["demographic_conflict"] = (
+        (out["gender_match"] == -1) | (out["age_group_match"] == -1)
+    ).astype("int8")
 
     # ── 6 Temmuz: Kategori Seviye Feature'ları ────────────────────────────────────
     # query_cat_l1_overlap tek başına yetersiz kalıyordu:
@@ -411,20 +447,21 @@ def build_features(df):
     #   query="spor ayakkabı"  + cat_l2="spor ayakkabı" → güçlü sinyal
     #   query="sneaker"        + cat_l3="sneaker"       → çok güçlü sinyal
     print("[features] query_cat_l2_overlap hesaplanıyor...")
-    out["query_cat_l2_overlap"] = out.apply(
-        lambda r: compute_query_cat_l2_overlap(r["query"], r["category"]), axis=1
-    )
+    out["query_cat_l2_overlap"] = [
+        _jaccard_token_sets(tokens, category_value[2])
+        for tokens, category_value in zip(query_tokens, category_values)
+    ]
 
     print("[features] query_cat_l3_overlap hesaplanıyor...")
-    out["query_cat_l3_overlap"] = out.apply(
-        lambda r: compute_query_cat_l3_overlap(r["query"], r["category"]), axis=1
-    )
+    out["query_cat_l3_overlap"] = [
+        _jaccard_token_sets(tokens, category_value[3])
+        for tokens, category_value in zip(query_tokens, category_values)
+    ]
 
     print("[features] cat_depth hesaplanıyor...")
     # cat_depth: "ayakkabı" = 1, "ayakkabı/spor" = 2, "ayakkabı/spor/sneaker" = 3
     # Derin kategoriler daha spesifik ürünlere işaret eder — model bunu öğrenebilir
-    # apply() yerine .apply(func) kullanıyoruz — satır değil kolon başına fonksiyon
-    out["cat_depth"] = out["category"].apply(compute_cat_depth)
+    out["cat_depth"] = [value[4] for value in category_values]
 
     # ── 8 Temmuz: Attributes Feature'ları ────────────────────────────────────
     # items.csv'deki 'attributes' kolonu renk, beden, materyal gibi yapısal bilgiler içerir.
