@@ -89,6 +89,7 @@ hard_negatives = generate_bm25_hard_negatives(
     top_n=TOP_N,
     ratio=RATIO,
     verbose=True,
+    positive_reference_df=train_raw,
 )
 elapsed = time.time() - t0
 print(f"\n  ✅ Üretim tamamlandı: {len(hard_negatives):,} hard negative ({elapsed:.1f}s)")

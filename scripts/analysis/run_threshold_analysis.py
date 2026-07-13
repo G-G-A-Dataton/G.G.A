@@ -39,7 +39,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.negative_sampling import build_training_set
-from src.metrics           import get_stratified_kfold
+from src.metrics           import get_stratified_group_kfold
 import lightgbm as lgb
 
 DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
@@ -68,7 +68,7 @@ LGBM_PARAMS = {
 }
 
 
-def compute_oof_predictions(X, y):
+def compute_oof_predictions(X, y, groups):
     """
     5-Fold CV ile Out-of-Fold (OOF) tahminleri üretir.
 
@@ -84,10 +84,12 @@ def compute_oof_predictions(X, y):
     -------
     np.ndarray  — OOF olasılık tahminleri (shape: len(X),)
     """
-    skf       = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
+    skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     oof_preds = np.zeros(len(X))
 
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+    for fold, (tr_idx, val_idx) in enumerate(
+        skf.split(X, y, groups=groups), start=1
+    ):
         print(f"  Fold {fold}/5 ...", end="\r")
         dtrain = lgb.Dataset(X.iloc[tr_idx], label=y.iloc[tr_idx])
         dval   = lgb.Dataset(X.iloc[val_idx], label=y.iloc[val_idx])
@@ -247,7 +249,8 @@ if __name__ == "__main__":
     pos_sample = train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED)
     full_train = build_training_set(
         pos_sample, items_df, ratio=NEG_RATIO,
-        random_state=RANDOM_SEED, verbose=False
+        random_state=RANDOM_SEED, verbose=False,
+        positive_reference_df=train_raw,
     )
     merged = full_train.merge(terms_df, on="term_id", how="left")
     merged = merged.merge(items_df,  on="item_id",  how="left")
@@ -260,7 +263,7 @@ if __name__ == "__main__":
 
     # 2. OOF tahminleri
     print("\n[2/3] OOF tahminleri uretiliyor (5-Fold CV)...")
-    oof_preds = compute_oof_predictions(X, y)
+    oof_preds = compute_oof_predictions(X, y, merged["term_id"])
 
     # 3. Threshold taraması
     print(f"\n[3/3] {len(THRESHOLDS)} threshold analiz ediliyor...")

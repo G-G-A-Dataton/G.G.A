@@ -34,7 +34,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.negative_sampling import build_training_set
-from src.metrics           import get_stratified_kfold
+from src.metrics           import get_stratified_group_kfold
 import lightgbm as lgb
 
 DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
@@ -64,7 +64,7 @@ LGBM_PARAMS = {
 LEAKAGE_WARNING_THRESHOLD = 0.50
 
 
-def compute_importance(X, y):
+def compute_importance(X, y, groups):
     """
     5-Fold CV yaparak tüm fold'lardaki feature importance'ları toplar.
 
@@ -83,13 +83,15 @@ def compute_importance(X, y):
     pd.DataFrame
         Her feature için gain ve split ortalamaları.
     """
-    skf = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
+    skf = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
 
     # Her fold'un importance'ını biriktir
     gain_list  = []
     split_list = []
 
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+    for fold, (tr_idx, val_idx) in enumerate(
+        skf.split(X, y, groups=groups), start=1
+    ):
         print(f"  Fold {fold}/5 egitiliyor...", end="\r")
         dtrain = lgb.Dataset(X.iloc[tr_idx], label=y.iloc[tr_idx])
         dval   = lgb.Dataset(X.iloc[val_idx], label=y.iloc[val_idx])
@@ -282,7 +284,8 @@ if __name__ == "__main__":
     pos_sample = train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED)
     full_train = build_training_set(
         pos_sample, items_df, ratio=NEG_RATIO,
-        random_state=RANDOM_SEED, verbose=False
+        random_state=RANDOM_SEED, verbose=False,
+        positive_reference_df=train_raw,
     )
     merged = full_train.merge(terms_df, on="term_id", how="left")
     merged = merged.merge(items_df,  on="item_id",  how="left")
@@ -294,7 +297,7 @@ if __name__ == "__main__":
 
     # 2. Feature importance hesapla
     print("\n[3/3] 5-Fold importance hesaplaniyor...")
-    importance_df = compute_importance(X, y)
+    importance_df = compute_importance(X, y, merged["term_id"])
 
     # 3. Sızıntı kontrolü
     warnings_list = check_leakage_risk(importance_df)

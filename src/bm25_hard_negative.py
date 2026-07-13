@@ -178,10 +178,11 @@ def generate_bm25_hard_negatives(
     ratio: int = 3,
     max_df_ratio: float = 0.15,
     verbose: bool = True,
+    positive_reference_df: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
-    Her benzersiz sorgu (term_id) için BM25 ile en benzer top_n üründen,
-    pozitif olmayanların arasından en fazla `ratio` adet hard negative seçer.
+    Her sorgu (term_id) için BM25 ile en benzer ürünlerden, o sorgunun eğitim
+    alt kümesindeki pozitif çift sayısı x `ratio` kadar hard negative seçer.
 
     Parametreler
     ----------
@@ -194,19 +195,51 @@ def generate_bm25_hard_negatives(
     top_n : int, default=50
         BM25 ile getirilecek aday sayısı (bu adaylardan pozitif olanlar elenir).
     ratio : int, default=3
-        Sorgu başına üretilecek hedef hard negative sayısı (üst sınır; top_n
-        adayları arasında yeterli pozitif-olmayan bulunamazsa daha az üretilir).
+        Her pozitif çift başına üretilecek hedef hard negative sayısı. BM25
+        adayları yetmezse daha az üretilebilir; karma üretici kalan kotayı
+        random negatiflerle doldurur.
     max_df_ratio : float, default=0.15
         BM25Index için — kataloğun bu orandan fazlasında geçen kelimeler
         indekslenmez (bkz. BM25Index docstring'i).
     verbose : bool, default=True
         İlerleme bilgisi yazdır.
+    positive_reference_df : pd.DataFrame, optional
+        Negatiflerden dışlanacak tüm bilinen pozitif çiftler. Örneklemli
+        çalışmada tam pozitif veri seti burada verilmelidir.
 
     Döndürür
     -------
     pd.DataFrame
         Kolonlar: term_id, item_id, label (hepsi 0)
     """
+    if not isinstance(ratio, int) or ratio <= 0:
+        raise ValueError(f"ratio must be a positive integer, got {ratio}")
+    if not isinstance(top_n, int) or top_n <= 0:
+        raise ValueError(f"top_n must be a positive integer, got {top_n}")
+    required_pairs = {"term_id", "item_id"}
+    if not required_pairs.issubset(train_df.columns):
+        raise ValueError(f"train_df must contain {sorted(required_pairs)}")
+    if train_df.empty:
+        return pd.DataFrame(columns=["term_id", "item_id", "label"])
+    if not {"term_id", "query"}.issubset(terms_df.columns):
+        raise ValueError("terms_df must contain term_id and query")
+    if terms_df["term_id"].duplicated().any():
+        raise ValueError("terms_df contains duplicate term_id values")
+    required_items = {"item_id", "title", "category", "brand"}
+    if not required_items.issubset(items_df.columns):
+        raise ValueError(f"items_df must contain {sorted(required_items)}")
+    if items_df.empty or items_df["item_id"].isna().any():
+        raise ValueError("items_df must contain non-null catalog items")
+    if items_df["item_id"].duplicated().any():
+        raise ValueError("items_df contains duplicate item_id values")
+    positive_reference_df = (
+        train_df if positive_reference_df is None else positive_reference_df
+    )
+    if not required_pairs.issubset(positive_reference_df.columns):
+        raise ValueError(
+            f"positive_reference_df must contain {sorted(required_pairs)}"
+        )
+
     if verbose:
         print("[bm25_hard_negative] Ürün metni standardize ediliyor...")
     item_texts = standardize_item_text(items_df).tolist()
@@ -222,8 +255,9 @@ def generate_bm25_hard_negatives(
               f"{len(index.inverted_index):,} benzersiz token indekslendi.")
 
     # Her term için pozitif item_id kümesi — hard negative bunlarla asla çakışmamalı.
-    pos_by_term = train_df.groupby("term_id")["item_id"].apply(set)
+    pos_by_term = positive_reference_df.groupby("term_id")["item_id"].apply(set)
     term_to_query = terms_df.set_index("term_id")["query"]
+    target_by_term = train_df.groupby("term_id").size().mul(ratio)
 
     unique_terms = train_df["term_id"].unique()
     if verbose:
@@ -235,13 +269,15 @@ def generate_bm25_hard_negatives(
         query = term_to_query.get(term_id, "")
         pos_items = pos_by_term.get(term_id, set())
 
+        target = int(target_by_term.loc[term_id])
+        candidate_limit = max(top_n, target + len(pos_items))
         added = 0
-        for item_id in index.top_n(query, n=top_n):
+        for item_id in index.top_n(query, n=candidate_limit):
             if item_id in pos_items:
                 continue
             negatives.append((term_id, item_id))
             added += 1
-            if added >= ratio:
+            if added >= target:
                 break
 
         if verbose and (i + 1) % 5_000 == 0:
@@ -252,6 +288,7 @@ def generate_bm25_hard_negatives(
     negatives_df["label"] = 0
 
     if verbose:
+        expected_total = int(target_by_term.sum())
         avg_found = len(negatives_df) / len(unique_terms) if len(unique_terms) else 0.0
         # reindex: hic hard negative uretilemeyen (0 satirlik) terimler
         # groupby sonucunda hic gorunmez, reindex ile bunlari da 0 olarak
@@ -261,9 +298,10 @@ def generate_bm25_hard_negatives(
             negatives_df.groupby("term_id").size().reindex(unique_terms, fill_value=0)
             if len(negatives_df) else pd.Series(0, index=unique_terms)
         )
-        eksik = (term_counts < ratio).sum()
+        target_counts = target_by_term.reindex(unique_terms)
+        eksik = (term_counts < target_counts).sum()
         print(f"[bm25_hard_negative] Toplam {len(negatives_df):,} hard negative uretildi "
-              f"(sorgu basina ort. {avg_found:.2f} / hedef {ratio}).")
+              f"(sorgu basina ort. {avg_found:.2f}; toplam hedef {expected_total:,}).")
         print(f"[bm25_hard_negative] Hedefin altinda kalan sorgu sayisi: {eksik:,} "
               f"(top_n adaylari arasinda yeterli pozitif-olmayan bulunamadi).")
 
@@ -294,6 +332,7 @@ if __name__ == "__main__":
 
     hard_negatives = generate_bm25_hard_negatives(
         sample_train, terms_df, items_df, top_n=50, ratio=3,
+        positive_reference_df=train_df,
     )
 
     print("\nSizinti kontrolu yapiliyor...")

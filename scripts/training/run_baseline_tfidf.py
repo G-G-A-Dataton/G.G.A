@@ -34,7 +34,7 @@ from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.negative_sampling import build_training_set
 from src.tfidf_features    import build_tfidf_vectorizer, add_tfidf_features, save_vectorizer
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_kfold
+from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
 
 import lightgbm as lgb
 
@@ -65,7 +65,8 @@ print(f"\n[2/7] Negatif ornekleme ({SAMPLE_SIZE:,} poz, ratio={NEGATIVE_RATIO}:1
 pos_sample = train_raw.sample(n=SAMPLE_SIZE, random_state=RANDOM_SEED)
 full_train = build_training_set(
     pos_sample, items_df,
-    ratio=NEGATIVE_RATIO, random_state=RANDOM_SEED, verbose=False
+    ratio=NEGATIVE_RATIO, random_state=RANDOM_SEED, verbose=False,
+    positive_reference_df=train_raw,
 )
 print(f"  Toplam: {len(full_train):,} satir")
 
@@ -116,12 +117,14 @@ lgbm_params = {
     "random_state"     : 42,
 }
 
-skf          = get_stratified_kfold(n_splits=5, random_state=42)
+skf          = get_stratified_group_kfold(n_splits=5, random_state=42)
 fold_scores  = []         # Her fold'un Macro-F1 skoru burada toplanır
 oof_preds    = np.zeros(len(X))  # Out-Of-Fold tahminler: threshold optimizasyonu için kullanılır
 trained_models = []       # Tüm fold modellerini saklıyoruz — submission sırasında ensemble yapılır
 
-for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+for fold, (train_idx, val_idx) in enumerate(
+    skf.split(X, y, groups=merged["term_id"]), start=1
+):
     X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
     y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
 

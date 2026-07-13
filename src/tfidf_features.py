@@ -326,7 +326,8 @@ if __name__ == "__main__":
     print("\nKucuk ornek egitim seti olusturuluyor (1000 pozitif, ratio=1)...")
     small_train = build_training_set(
         train_raw.sample(1000, random_state=42), items_df,
-        ratio=1, random_state=42, verbose=False
+        ratio=1, random_state=42, verbose=False,
+        positive_reference_df=train_raw,
     )
 
     # Merge et

@@ -39,7 +39,7 @@ from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.tfidf_features    import build_tfidf_vectorizer, add_tfidf_features, save_vectorizer
 from src.train_mix_v2      import build_mixed_training_set, verify_mix_no_leakage
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_kfold
+from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
 from src.error_analysis    import generate_error_report
 import lightgbm as lgb
 
@@ -125,10 +125,12 @@ def main():
         bm25_top_n=args.bm25_top_n,
         random_state=RANDOM_SEED,
         verbose=True,
+        positive_reference_df=train_raw,
     )
 
     print("\n  Sizinti kontrolu...")
-    verify_mix_no_leakage(full_train, train_raw)
+    if not verify_mix_no_leakage(full_train, train_raw):
+        raise RuntimeError("Negative sampling leakage check failed")
 
     # ─── 3. Merge + Feature'lar ───────────────────────────────────────────────
     print("\n[3/7] Merge ve temel feature hesaplaniyor...")
@@ -159,12 +161,14 @@ def main():
     print("\n[5/7] LightGBM 5-Fold Stratified CV basliyor...")
     print("-" * 60)
 
-    skf         = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
+    skf         = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     fold_scores = []
     oof_preds   = np.zeros(len(X))
     trained_models = []
 
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+    for fold, (tr_idx, val_idx) in enumerate(
+        skf.split(X, y, groups=merged["term_id"]), start=1
+    ):
         X_tr, X_val = X.iloc[tr_idx], X.iloc[val_idx]
         y_tr, y_val = y.iloc[tr_idx], y.iloc[val_idx]
 

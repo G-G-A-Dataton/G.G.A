@@ -25,7 +25,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.negative_sampling import build_training_set
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_kfold
+from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
 
 import lightgbm as lgb
 
@@ -57,7 +57,8 @@ full_train = build_training_set(
     pos_sample, items_df,
     ratio=NEGATIVE_RATIO,
     random_state=RANDOM_SEED,
-    verbose=False
+    verbose=False,
+    positive_reference_df=train_raw,
 )
 counts = full_train["label"].value_counts()
 print(f"  Pozitif (1): {counts.get(1, 0):,}")
@@ -91,12 +92,14 @@ lgbm_params = {
     "random_state"     : 42,
 }
 
-skf          = get_stratified_kfold(n_splits=5, random_state=42)
+skf          = get_stratified_group_kfold(n_splits=5, random_state=42)
 fold_scores  = []
 oof_preds    = np.zeros(len(X))
 trained_models = []
 
-for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+for fold, (train_idx, val_idx) in enumerate(
+    skf.split(X, y, groups=merged["term_id"]), start=1
+):
     X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
     y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
 

@@ -171,7 +171,8 @@ def run_poc(n_samples=200, batch_size=32):
     pos_sample = train_raw.sample(n=n_samples, random_state=SEED)
     full_set   = build_training_set(
         pos_sample, items_df, ratio=1,
-        random_state=SEED, verbose=False
+        random_state=SEED, verbose=False,
+        positive_reference_df=train_raw,
     )
     merged = full_set.merge(terms_df, on="term_id", how="left")
     merged = merged.merge(items_df,  on="item_id",  how="left")

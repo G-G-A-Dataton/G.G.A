@@ -39,7 +39,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.negative_sampling import build_training_set, verify_no_leakage
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_kfold
+from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
 import lightgbm as lgb
 
 DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
@@ -110,13 +110,15 @@ def train_and_eval(pos_df, neg_df, terms_df, items_df, label):
         "random_state"     : RANDOM_SEED,
     }
 
-    # 5-Fold Stratified CV
-    skf         = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
+    # Grouped validation keeps each query entirely in one fold.
+    skf         = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     fold_scores = []
     oof_preds   = np.zeros(len(X))
 
     print("  5-Fold CV basliyor...")
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+    for fold, (tr_idx, val_idx) in enumerate(
+        skf.split(X, y, groups=merged["term_id"]), start=1
+    ):
         X_tr, X_val = X.iloc[tr_idx], X.iloc[val_idx]
         y_tr, y_val = y.iloc[tr_idx], y.iloc[val_idx]
 
@@ -185,7 +187,8 @@ def main(bm25_path=None):
     print("\n[2/4] Random Negative uretiliyor...")
     random_full = build_training_set(
         pos_sample, items_df,
-        ratio=NEG_RATIO, random_state=RANDOM_SEED, verbose=False
+        ratio=NEG_RATIO, random_state=RANDOM_SEED, verbose=False,
+        positive_reference_df=train_raw,
     )
     # Sadece negatif örnekleri al
     random_neg = random_full[random_full["label"] == 0].copy()
@@ -201,6 +204,9 @@ def main(bm25_path=None):
             bm25_path,
             dtype={"term_id": "string", "item_id": "string"}
         )
+        bm25_neg = bm25_neg[
+            bm25_neg["term_id"].isin(pos_sample["term_id"])
+        ].drop_duplicates(["term_id", "item_id"])
 
         # Sızıntı kontrolü — BM25 negatifleri asla pozitif olmamalı
         print("  Sizinti kontrolu yapiliyor...")
@@ -212,10 +218,24 @@ def main(bm25_path=None):
             mask = ~bm25_neg.apply(lambda r: (r["term_id"], r["item_id"]) in pos_pairs, axis=1)
             bm25_neg = bm25_neg[mask].copy()
 
-        # BM25 negatiflerini de aynı orana getir
-        needed = len(pos_sample) * NEG_RATIO
-        if len(bm25_neg) > needed:
-            bm25_neg = bm25_neg.sample(n=needed, random_state=RANDOM_SEED)
+        # BM25 negatiflerini her term icin ayni orana getir.
+        needed_by_term = pos_sample.groupby("term_id").size().mul(NEG_RATIO)
+        sampled_groups = []
+        missing = {}
+        for term_id, needed in needed_by_term.items():
+            candidates = bm25_neg[bm25_neg["term_id"] == term_id]
+            if len(candidates) < needed:
+                missing[str(term_id)] = int(needed - len(candidates))
+                continue
+            sampled_groups.append(
+                candidates.sample(n=int(needed), random_state=RANDOM_SEED)
+            )
+        if missing:
+            raise ValueError(
+                "BM25 input does not satisfy the per-term comparison quota: "
+                f"{dict(list(missing.items())[:5])}"
+            )
+        bm25_neg = pd.concat(sampled_groups, ignore_index=True)
         print(f"  {len(bm25_neg):,} BM25 hard negatif ornek hazirlandi.")
 
         result_bm25 = train_and_eval(pos_sample, bm25_neg, terms_df, items_df, "BM25 Hard Negative")

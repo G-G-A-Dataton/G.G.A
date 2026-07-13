@@ -37,7 +37,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.negative_sampling import build_training_set
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_kfold
+from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
 from src.embedding_cosine  import add_embedding_cosine_feature, load_embedding_indexes
 import lightgbm as lgb
 
@@ -65,7 +65,7 @@ LGBM_PARAMS = {
 EMBEDDING_FEATURE = "embedding_cosine"
 
 
-def run_cv(X, y, feature_cols, label=""):
+def run_cv(X, y, groups, feature_cols, label=""):
     """
     5-Fold CV ile Macro-F1 olcer.
 
@@ -84,12 +84,14 @@ def run_cv(X, y, feature_cols, label=""):
     available = [f for f in feature_cols if f in X.columns]
     X_sub = X[available]
 
-    skf       = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
+    skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     scores    = []
     oof_preds = np.zeros(len(X_sub))
     t0        = time.time()
 
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X_sub, y), start=1):
+    for fold, (tr_idx, val_idx) in enumerate(
+        skf.split(X_sub, y, groups=groups), start=1
+    ):
         print(f"  [{label}] Fold {fold}/5 ...", end="\r")
         dtrain = lgb.Dataset(X_sub.iloc[tr_idx], label=y.iloc[tr_idx])
         dval   = lgb.Dataset(X_sub.iloc[val_idx], label=y.iloc[val_idx])
@@ -165,11 +167,13 @@ if __name__ == "__main__":
     pos_sample = train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED)
     full_train = build_training_set(
         pos_sample, items_df, ratio=NEG_RATIO,
-        random_state=RANDOM_SEED, verbose=False
+        random_state=RANDOM_SEED, verbose=False,
+        positive_reference_df=train_raw,
     )
     merged = full_train.merge(terms_df, on="term_id", how="left")
     merged = merged.merge(items_df,  on="item_id",  how="left")
     merged = build_features(merged)
+    groups = merged["term_id"]
     print(f"  {len(merged):,} satir, {len(FEATURE_COLS)} temel feature hazir")
 
     # 2. Embedding cosine ekle (gercek veya sentetik)
@@ -197,11 +201,13 @@ if __name__ == "__main__":
     results = []
 
     print("\n  -- LGBM_BASE (embedding yok) --")
-    r_base = run_cv(X, y, FEATURE_COLS, label="LGBM_BASE")
+    r_base = run_cv(X, y, groups, FEATURE_COLS, label="LGBM_BASE")
     results.append(r_base)
 
     print("\n  -- LGBM_EMB (embedding cosine ekli) --")
-    r_emb = run_cv(X, y, FEATURE_COLS + [EMBEDDING_FEATURE], label="LGBM_EMB")
+    r_emb = run_cv(
+        X, y, groups, FEATURE_COLS + [EMBEDDING_FEATURE], label="LGBM_EMB"
+    )
     results.append(r_emb)
 
     # 4. Sonuclar

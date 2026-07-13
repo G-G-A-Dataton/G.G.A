@@ -6,12 +6,12 @@ G.G.A Takımı — Yarışma Metrik ve Validasyon Şeması
 Ömer Faruk Kara tarafından hazırlanmıştır.
 
 Yarışmanın resmi metriği: Macro-F1
-Doğrulama şeması: 5-Fold Stratified K-Fold
+Doğrulama şeması: 5-Fold Stratified Group K-Fold (group=term_id)
 """
 
 import numpy as np
 from sklearn.metrics import f1_score
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 
 
 # ─────────────────────────────────────────────
@@ -106,13 +106,13 @@ def find_best_threshold(y_true, y_proba, thresholds=None):
 
 
 # ─────────────────────────────────────────────
-# 2. Stratified K-Fold Validasyon Şeması
+# 2. Stratified Group K-Fold Validasyon Şeması
 # ─────────────────────────────────────────────
 
-def get_stratified_kfold(n_splits=5, shuffle=True, random_state=42):
+def get_stratified_group_kfold(n_splits=5, shuffle=True, random_state=42):
     """
-    Takım standartlarına uygun 5-Fold Stratified K-Fold nesnesi döndürür.
-    Seed olarak proje geneli 42 kullanılır.
+    Aynı term_id'nin train ve validation'a bölünmesini engelleyen
+    StratifiedGroupKFold nesnesi döndürür.
 
     Parametreler
     ----------
@@ -125,15 +125,27 @@ def get_stratified_kfold(n_splits=5, shuffle=True, random_state=42):
 
     Döndürür
     -------
-    StratifiedKFold
-        Scikit-learn StratifiedKFold nesnesi.
+    StratifiedGroupKFold
+        Scikit-learn StratifiedGroupKFold nesnesi.
     """
-    return StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
+    return StratifiedGroupKFold(
+        n_splits=n_splits,
+        shuffle=shuffle,
+        random_state=random_state,
+    )
 
 
-def cross_validate_macro_f1(model, X, y, n_splits=5, random_state=42, verbose=True):
+def cross_validate_macro_f1(
+    model,
+    X,
+    y,
+    groups,
+    n_splits=5,
+    random_state=42,
+    verbose=True,
+):
     """
-    5-Fold Stratified CV ile Macro-F1 çapraz doğrulaması yapar.
+    5-Fold Stratified Group CV ile Macro-F1 çapraz doğrulaması yapar.
 
     Parametreler
     ----------
@@ -143,6 +155,8 @@ def cross_validate_macro_f1(model, X, y, n_splits=5, random_state=42, verbose=Tr
         Özellik matrisi.
     y : array-like of int
         Hedef etiketler (0 veya 1).
+    groups : array-like
+        Aynı sorguya ait satırları tek fold'da tutan grup kimlikleri.
     n_splits : int, default=5
         Fold sayısı.
     random_state : int, default=42
@@ -159,10 +173,14 @@ def cross_validate_macro_f1(model, X, y, n_splits=5, random_state=42, verbose=Tr
     std_score : float
         Standart sapma.
     """
-    skf = get_stratified_kfold(n_splits=n_splits, random_state=random_state)
+    skf = get_stratified_group_kfold(
+        n_splits=n_splits, random_state=random_state
+    )
     fold_scores = []
 
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+    for fold_idx, (train_idx, val_idx) in enumerate(
+        skf.split(X, y, groups=groups), start=1
+    ):
         X_train_fold = X.iloc[train_idx] if hasattr(X, 'iloc') else X[train_idx]
         X_val_fold   = X.iloc[val_idx]   if hasattr(X, 'iloc') else X[val_idx]
         y_train_fold = y.iloc[train_idx] if hasattr(y, 'iloc') else y[train_idx]

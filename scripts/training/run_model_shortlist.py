@@ -38,7 +38,7 @@ from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.tfidf_features    import build_tfidf_vectorizer, add_tfidf_features, save_vectorizer
 from src.train_mix_v2      import build_mixed_training_set
-from src.metrics           import get_stratified_kfold, macro_f1_from_proba, find_best_threshold
+from src.metrics           import get_stratified_group_kfold, macro_f1_from_proba, find_best_threshold
 
 try:
     import xgboost as xgb
@@ -88,15 +88,17 @@ def parse_args():
     return parser.parse_args()
 
 
-def train_and_predict_oof(X, y, X_test, model_type="lgbm"):
+def train_and_predict_oof(X, y, groups, X_test, model_type="lgbm"):
     """
     5-Fold Stratified CV ile OOF ve Test tahminlerini üretir.
     """
-    skf = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
+    skf = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     oof_preds = np.zeros(len(X))
     test_preds = np.zeros(len(X_test))
 
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+    for fold, (tr_idx, val_idx) in enumerate(
+        skf.split(X, y, groups=groups), start=1
+    ):
         print(f"  [{model_type.upper()}] Fold {fold}/5 eğitiliyor...", flush=True)
 
         X_train, y_train = X.iloc[tr_idx], y.iloc[tr_idx]
@@ -155,6 +157,7 @@ def main():
         os.path.join(DATA_DIR, "training_pairs.csv"),
         dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
     )
+    positive_reference = train_raw[["term_id", "item_id"]].copy()
 
     if args.sample:
         print(f"  Eğitim seti pozitif örnekleniyor: {args.sample:,} satır")
@@ -168,7 +171,8 @@ def main():
         bm25_top_n=50,
         bm25_max_df_ratio=0.15,
         random_state=RANDOM_SEED,
-        verbose=True
+        verbose=True,
+        positive_reference_df=positive_reference,
     )
     
     merged = full_train.merge(terms_df, on="term_id", how="left")
@@ -198,6 +202,7 @@ def main():
     feature_cols = FEATURE_COLS + ["tfidf_cosine"]
     X = merged[feature_cols]
     y = merged["label"]
+    groups = merged["term_id"]
     X_test = sub_merged[feature_cols]
 
     print(f"  Tren boyutu : {X.shape}")
@@ -208,13 +213,13 @@ def main():
     print("\n[4/5] Shortlist model adaylarinin egitimi basliyor...")
     
     # Model A: LightGBM
-    oof_lgbm, test_lgbm = train_and_predict_oof(X, y, X_test, model_type="lgbm")
+    oof_lgbm, test_lgbm = train_and_predict_oof(X, y, groups, X_test, model_type="lgbm")
     f1_lgbm = macro_f1_from_proba(y, oof_lgbm, threshold=0.5)
     best_th_lgb, best_f1_lgb, _ = find_best_threshold(y.values, oof_lgbm)
     print(f"  -> LightGBM Default F1 (0.50): {f1_lgbm:.4f} | Best F1 ({best_th_lgb:.2f}): {best_f1_lgb:.4f}")
 
     # Model B: XGBoost
-    oof_xgb, test_xgb = train_and_predict_oof(X, y, X_test, model_type="xgb")
+    oof_xgb, test_xgb = train_and_predict_oof(X, y, groups, X_test, model_type="xgb")
     f1_xgb = macro_f1_from_proba(y, oof_xgb, threshold=0.5)
     best_th_xgb, best_f1_xgb, _ = find_best_threshold(y.values, oof_xgb)
     print(f"  -> XGBoost  Default F1 (0.50): {f1_xgb:.4f} | Best F1 ({best_th_xgb:.2f}): {best_f1_xgb:.4f}")

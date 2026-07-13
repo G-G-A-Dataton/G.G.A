@@ -14,7 +14,7 @@ Neden karışık negatif (mix)?
   train_mix_v2 bunu çözer:
   ─ Önce BM25 hard negative üret (top_n=50, ratio=3)
   ─ Eksik kalan (ratio'ya ulaşamayan) sorguların kotasını random ile doldur
-  ─ Sonuç: her sorgu için tam 3 negatif, toplamda %0 veri kaybı
+  ─ Sonuç: her pozitif çift için tam 3 negatif, toplamda %0 veri kaybı
 
   Bu "hibrit" strateji:
   ─ Modeli zor örneklerle eğitiyor (BM25 katkısı)
@@ -42,12 +42,13 @@ def build_mixed_training_set(
     bm25_max_df_ratio: float = 0.15,
     random_state: int = 42,
     verbose: bool = True,
+    positive_reference_df: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
     BM25 hard negative + random fallback karışık eğitim seti üretir.
 
     Strateji:
-      1. BM25 ile her sorgu için ratio kadar hard negative üret
+      1. BM25 ile her pozitif çift için ratio kadar hard negative üret
       2. Bazı sorguların kotası dolmayabilir (BM25 yeterli aday bulamazsa)
       3. Eksik olan kısımlar için random negative üret (aynı term_id'ler için)
       4. Pozitifler + (BM25 hard neg + random dolgu) birleştirilerek tam set döner
@@ -70,6 +71,8 @@ def build_mixed_training_set(
         Tekrar üretilebilirlik için seed.
     verbose : bool, default=True
         İlerleme bilgisi yazdır.
+    positive_reference_df : pd.DataFrame, optional
+        Negatiflerden dışlanacak tüm bilinen pozitif çiftler.
 
     Döndürür
     -------
@@ -77,6 +80,14 @@ def build_mixed_training_set(
         Karıştırılmış pozitif + negatif çiftler.
         Kolonlar: term_id, item_id, label, neg_source (bm25 / random / positive)
     """
+    if not isinstance(ratio, int) or ratio <= 0:
+        raise ValueError(f"ratio must be a positive integer, got {ratio}")
+    if train_df.empty:
+        raise ValueError("train_df must contain at least one positive pair")
+    positive_reference_df = (
+        train_df if positive_reference_df is None else positive_reference_df
+    )
+
     if verbose:
         print("=" * 60)
         print("  train_mix_v2 — Karma Negatif Eğitim Seti Üretimi")
@@ -95,19 +106,20 @@ def build_mixed_training_set(
         ratio=ratio,
         max_df_ratio=bm25_max_df_ratio,
         verbose=verbose,
+        positive_reference_df=positive_reference_df,
     )
 
     # ─── 2. Eksikleri Hesapla ─────────────────────────────────────────────────
     # Her term_id için kaç BM25 negatif üretilebildi?
     bm25_counts = bm25_neg.groupby("term_id").size()
 
-    # Tüm benzersiz term'lar için hedef (ratio adet negatif)
-    all_terms = train_df["term_id"].unique()
-    hedef_per_term = pd.Series(ratio, index=all_terms)
+    # Her term'in hedefi, o term'e ait pozitif çift sayısı x ratio'dur.
+    target_by_term = train_df.groupby("term_id").size().mul(ratio)
+    all_terms = target_by_term.index
 
     # Eksik: hedef - gerçekleşen (negatif olursa 0'a sabitlenir)
     gerceklesen = bm25_counts.reindex(all_terms, fill_value=0)
-    eksik = (hedef_per_term - gerceklesen).clip(lower=0)
+    eksik = (target_by_term - gerceklesen).clip(lower=0).astype(int)
 
     n_eksik_term = (eksik > 0).sum()
     n_eksik_neg  = int(eksik.sum())
@@ -115,7 +127,7 @@ def build_mixed_training_set(
     if verbose:
         print(f"\n[2/4] Eksik analizi:")
         print(f"  BM25 üretilen  : {len(bm25_neg):,} negatif")
-        print(f"  Hedef          : {len(all_terms) * ratio:,} negatif")
+        print(f"  Hedef          : {int(target_by_term.sum()):,} negatif")
         print(f"  Eksik          : {n_eksik_neg:,} negatif ({n_eksik_term:,} sorgu için)")
 
     # ─── 3. Eksik Kısımları Random ile Doldur ────────────────────────────────
@@ -123,43 +135,23 @@ def build_mixed_training_set(
         if verbose:
             print(f"\n[3/4] {n_eksik_neg:,} eksik negatifi random ile dolduruluyor...")
 
-        # Sadece eksik olan term'lar için pozitif çiftleri al
-        # generate_random_negatives'e göndereceğimiz train_df'i filtrele:
-        # Eksik sayısı kadar satır içermeli (term_id başına eksik_count kadar tekrar)
-        eksik_term_ids = eksik[eksik > 0].index
-        eksik_rows = []
-        for term_id, eksik_sayi in eksik[eksik > 0].items():
-            # Bu term'in herhangi bir pozitif çiftini al (term_id doğru olsun)
-            term_pos = train_df[train_df["term_id"] == term_id].head(1)
-            # eksik_sayi kez tekrarla
-            eksik_rows.append(
-                pd.concat([term_pos] * int(eksik_sayi), ignore_index=True)
-            )
-
-        eksik_df = pd.concat(eksik_rows, ignore_index=True) if eksik_rows else pd.DataFrame()
-
-        if len(eksik_df) > 0:
-            # Bu küçük set üzerinde random negative üret (1:1 oranı — zaten 1 satır = 1 negatif)
-            random_neg = generate_random_negatives(
-                train_df=eksik_df,
-                items_df=items_df,
-                ratio=1,
-                random_state=random_state,
-                verbose=False,
-            )
-            # BM25 ile üretilmiş negatiflerin üzerine çakışma kontrolü
-            bm25_pairs  = set(zip(bm25_neg["term_id"], bm25_neg["item_id"]))
-            pos_pairs   = set(zip(train_df["term_id"], train_df["item_id"]))
-            random_neg  = random_neg[
-                random_neg.apply(
-                    lambda r: (r["term_id"], r["item_id"]) not in bm25_pairs
-                              and (r["term_id"], r["item_id"]) not in pos_pairs,
-                    axis=1
-                )
-            ]
-            random_neg["neg_source"] = "random"
-        else:
-            random_neg = pd.DataFrame(columns=["term_id", "item_id", "label", "neg_source"])
+        missing_terms = np.repeat(
+            eksik[eksik > 0].index.to_numpy(),
+            eksik[eksik > 0].to_numpy(),
+        )
+        quota_df = pd.DataFrame(
+            {"term_id": missing_terms, "item_id": pd.NA}, dtype="string"
+        )
+        random_neg = generate_random_negatives(
+            train_df=quota_df,
+            items_df=items_df,
+            ratio=1,
+            random_state=random_state,
+            verbose=False,
+            positive_reference_df=positive_reference_df,
+            excluded_pairs_df=bm25_neg,
+        )
+        random_neg["neg_source"] = "random"
     else:
         if verbose:
             print("\n[3/4] Eksik yok — tum negativler BM25'ten geldi.")
@@ -181,6 +173,28 @@ def build_mixed_training_set(
 
     full_df = pd.concat(all_parts, ignore_index=True)
     full_df  = full_df.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
+
+    negatives = full_df[full_df["label"] == 0]
+    expected_negative_count = len(train_df) * ratio
+    if len(negatives) != expected_negative_count:
+        raise RuntimeError(
+            f"Negative quota mismatch: expected {expected_negative_count}, "
+            f"got {len(negatives)}"
+        )
+    if negatives.duplicated(["term_id", "item_id"]).any():
+        raise RuntimeError("Mixed negative set contains duplicate term-item pairs")
+    expected_by_term = target_by_term.sort_index()
+    actual_by_term = negatives.groupby("term_id").size().reindex(
+        expected_by_term.index, fill_value=0
+    )
+    if not actual_by_term.equals(expected_by_term):
+        raise RuntimeError("Per-term negative quotas were not satisfied")
+    positive_pairs = set(
+        zip(positive_reference_df["term_id"], positive_reference_df["item_id"])
+    )
+    negative_pairs = set(zip(negatives["term_id"], negatives["item_id"]))
+    if positive_pairs & negative_pairs:
+        raise RuntimeError("Mixed negative set overlaps known positive pairs")
 
     # ─── Özet ────────────────────────────────────────────────────────────────
     if verbose:
@@ -248,6 +262,7 @@ if __name__ == "__main__":
     mixed = build_mixed_training_set(
         sample_train, terms_df, items_df,
         ratio=3, bm25_top_n=50, verbose=True,
+        positive_reference_df=train_raw,
     )
 
     print("\nSizinti kontrolu...")

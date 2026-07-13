@@ -142,7 +142,8 @@ if __name__ == "__main__":
     print(f"[2/3] {SAMPLE_POS} pozitif + {SAMPLE_POS*NEG_RATIO} negatif ornek hazirlaniyor...")
     sample = build_training_set(
         train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED),
-        items_df, ratio=NEG_RATIO, random_state=RANDOM_SEED, verbose=False
+        items_df, ratio=NEG_RATIO, random_state=RANDOM_SEED, verbose=False,
+        positive_reference_df=train_raw,
     )
     merged = sample.merge(terms_df, on="term_id", how="left")
     merged = merged.merge(items_df,  on="item_id",  how="left")

@@ -38,7 +38,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.negative_sampling import build_training_set
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_kfold
+from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
 import lightgbm as lgb
 
 DATA_DIR   = os.path.join(PROJECT_ROOT, "datasets")
@@ -86,7 +86,7 @@ LGBM_PARAMS = {
 }
 
 
-def run_single(X, y, feature_names):
+def run_single(X, y, groups, feature_names):
     """
     Verilen feature seti üzerinde 5-Fold CV yaparak Macro-F1 döndürür.
 
@@ -105,12 +105,14 @@ def run_single(X, y, feature_names):
     available = [f for f in feature_names if f in X.columns]
     X_sub = X[available]
 
-    skf       = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
+    skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     scores    = []
     oof_preds = np.zeros(len(X_sub))
     t0        = time.time()
 
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X_sub, y), start=1):
+    for fold, (tr_idx, val_idx) in enumerate(
+        skf.split(X_sub, y, groups=groups), start=1
+    ):
         dtrain = lgb.Dataset(X_sub.iloc[tr_idx], label=y.iloc[tr_idx])
         dval   = lgb.Dataset(X_sub.iloc[val_idx], label=y.iloc[val_idx])
 
@@ -235,7 +237,8 @@ if __name__ == "__main__":
         print(f"  Oran {ratio}:1 ...", end=" ", flush=True)
         full = build_training_set(
             pos_sample, items_df,
-            ratio=ratio, random_state=RANDOM_SEED, verbose=False
+            ratio=ratio, random_state=RANDOM_SEED, verbose=False,
+            positive_reference_df=train_raw,
         )
         merged = full.merge(terms_df, on="term_id", how="left")
         merged = merged.merge(items_df,  on="item_id",  how="left")
@@ -256,7 +259,7 @@ if __name__ == "__main__":
         y = merged["label"]
 
         print(f"  [{exp_num:02d}/{total_exp}] oran={ratio}:1, features={fs_name} ...", end=" ", flush=True)
-        result = run_single(X, y, fs_cols)
+        result = run_single(X, y, merged["term_id"], fs_cols)
         result.update({"neg_ratio": ratio, "feature_set": fs_name})
         results.append(result)
         print(f"mean_F1={result['mean_f1']:.4f}  best={result['best_f1']:.4f}")

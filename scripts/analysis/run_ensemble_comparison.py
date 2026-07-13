@@ -36,7 +36,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.data              import load_terms, load_items
 from src.features          import build_features, FEATURE_COLS
 from src.negative_sampling import build_training_set
-from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_kfold
+from src.metrics           import macro_f1_from_proba, find_best_threshold, get_stratified_group_kfold
 import lightgbm as lgb
 try:
     import xgboost as xgb
@@ -85,7 +85,7 @@ XGB_BASE_PARAMS = {
 }
 
 
-def run_lgbm_cv(X, y, params, label):
+def run_lgbm_cv(X, y, groups, params, label):
     """
     LightGBM 5-Fold CV yapar ve OOF tahminleri dondurur.
 
@@ -103,11 +103,13 @@ def run_lgbm_cv(X, y, params, label):
     -------
     (np.ndarray, float)  — (oof_preds, elapsed_sec)
     """
-    skf       = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
+    skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     oof_preds = np.zeros(len(X))
     t0        = time.time()
 
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+    for fold, (tr_idx, val_idx) in enumerate(
+        skf.split(X, y, groups=groups), start=1
+    ):
         print(f"  [{label}] Fold {fold}/5 ...", end="\r")
         dtrain = lgb.Dataset(X.iloc[tr_idx], label=y.iloc[tr_idx])
         dval   = lgb.Dataset(X.iloc[val_idx], label=y.iloc[val_idx])
@@ -123,7 +125,7 @@ def run_lgbm_cv(X, y, params, label):
     return oof_preds, time.time() - t0
 
 
-def run_xgb_cv(X, y, params, label):
+def run_xgb_cv(X, y, groups, params, label):
     """
     XGBoost 5-Fold CV yapar.
 
@@ -144,11 +146,13 @@ def run_xgb_cv(X, y, params, label):
     if not XGB_AVAILABLE:
         return np.zeros(len(y)), 0.0
 
-    skf       = get_stratified_kfold(n_splits=5, random_state=RANDOM_SEED)
+    skf       = get_stratified_group_kfold(n_splits=5, random_state=RANDOM_SEED)
     oof_preds = np.zeros(len(X))
     t0        = time.time()
 
-    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+    for fold, (tr_idx, val_idx) in enumerate(
+        skf.split(X, y, groups=groups), start=1
+    ):
         print(f"  [{label}] Fold {fold}/5 ...", end="\r")
         dtrain = xgb.DMatrix(X.iloc[tr_idx], label=y.iloc[tr_idx])
         dval   = xgb.DMatrix(X.iloc[val_idx], label=y.iloc[val_idx])
@@ -197,12 +201,16 @@ if __name__ == "__main__":
         dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"}
     )
     pos_sample = train_raw.sample(SAMPLE_POS, random_state=RANDOM_SEED)
-    full       = build_training_set(pos_sample, items_df, ratio=NEG_RATIO,
-                                     random_state=RANDOM_SEED, verbose=False)
+    full       = build_training_set(
+        pos_sample, items_df, ratio=NEG_RATIO,
+        random_state=RANDOM_SEED, verbose=False,
+        positive_reference_df=train_raw,
+    )
     merged     = full.merge(terms_df, on="term_id", how="left").merge(items_df, on="item_id", how="left")
     merged     = build_features(merged)
     X          = merged[FEATURE_COLS]
     y          = merged["label"]
+    groups     = merged["term_id"]
     print(f"  {len(merged):,} satir, {len(FEATURE_COLS)} feature")
 
     # 2. Modelleri calistir
@@ -211,18 +219,18 @@ if __name__ == "__main__":
     oof_store = {}
 
     print("\n  -- LGBM_BASE --")
-    oof_lgbm_base, t = run_lgbm_cv(X, y, LGBM_BASE_PARAMS, "LGBM_BASE")
+    oof_lgbm_base, t = run_lgbm_cv(X, y, groups, LGBM_BASE_PARAMS, "LGBM_BASE")
     results.append(score(y, oof_lgbm_base, "LGBM_BASE", t))
     oof_store["lgbm_base"] = oof_lgbm_base
 
     print("\n  -- LGBM_TUNED --")
-    oof_lgbm_tuned, t = run_lgbm_cv(X, y, LGBM_TUNED_PARAMS, "LGBM_TUNED")
+    oof_lgbm_tuned, t = run_lgbm_cv(X, y, groups, LGBM_TUNED_PARAMS, "LGBM_TUNED")
     results.append(score(y, oof_lgbm_tuned, "LGBM_TUNED", t))
     oof_store["lgbm_tuned"] = oof_lgbm_tuned
 
     if XGB_AVAILABLE:
         print("\n  -- XGB_BASE --")
-        oof_xgb, t = run_xgb_cv(X, y, XGB_BASE_PARAMS, "XGB_BASE")
+        oof_xgb, t = run_xgb_cv(X, y, groups, XGB_BASE_PARAMS, "XGB_BASE")
         results.append(score(y, oof_xgb, "XGB_BASE", t))
         oof_store["xgb_base"] = oof_xgb
 
