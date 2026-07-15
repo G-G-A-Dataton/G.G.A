@@ -3,10 +3,15 @@
   "name": "gga_final_v1",
   "random_state": 42,
   "candidate_sampling": {
-    "strategy": "test_shaped_category_random",
+    "strategy": "test_shaped_bm25_category_random",
     "min_candidates": 100,
     "dense_multiplier": 2.0,
-    "category_hard_fraction": 0.5
+    "bm25_hard_fraction": 0.2,
+    "category_hard_fraction": 0.5,
+    "bm25_top_n": 200,
+    "bm25_max_df_ratio": 0.15,
+    "random_state": 42,
+    "positive_reference_rows": 250000
   },
   "validation": {
     "splitter": "StratifiedGroupKFold",

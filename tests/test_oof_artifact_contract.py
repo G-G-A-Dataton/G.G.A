@@ -15,6 +15,7 @@ from src.oof_artifacts import (
     EXPECTED_TRAINING_ROWS,
     EXPECTED_TRAINING_TERMS,
     OOF_FILENAMES,
+    PRODUCTION_CANDIDATE_SAMPLING,
     PRODUCTION_EARLY_STOPPING_ROUNDS,
     PRODUCTION_NUM_BOOST_ROUND,
     load_oof_artifacts,
@@ -112,6 +113,17 @@ class OofArtifactContractTests(unittest.TestCase):
         self.write_manifest()
         manifest = validate_oof_artifacts(self.temp_dir.name)
         self.assertEqual(manifest["validation"]["group_column"], "term_id")
+
+    def test_final_config_matches_production_candidate_contract(self):
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(
+            os.path.join(project_root, "configs", "final_v1.json"),
+            encoding="utf-8",
+        ) as config_file:
+            config = json.load(config_file)
+        self.assertEqual(
+            config["candidate_sampling"], PRODUCTION_CANDIDATE_SAMPLING
+        )
 
     def test_loader_checks_array_shapes_values_and_folds(self):
         arrays = {
