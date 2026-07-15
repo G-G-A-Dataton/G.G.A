@@ -1,5 +1,9 @@
 # Solution Method v1
 
+> This historical method snapshot is superseded by
+> [`final_solution_report_v2.md`](final_solution_report_v2.md) for the complete
+> 16 July solution, candidate strategy, QA, and reproducibility evidence.
+
 **Contract date:** 15 July 2026
 **Scope:** final candidate generation, features, validation, model selection, and inference
 

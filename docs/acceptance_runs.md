@@ -6,7 +6,7 @@ Only reproducible local evidence is recorded here. Sample scores validate pipeli
 
 | Check | Result |
 |---|---|
-| Unit/integration suite | 102/102 passed |
+| Current unit/integration suite | 108/108 passed |
 | Python | 3.13.5 verified |
 | Hash-locked environment | 158/158 exact; direct pins preserved |
 | Frozen competition files | 5/5 row/schema/size/SHA-256 checks passed |
@@ -132,6 +132,20 @@ environment with all 158 hash-locked packages installed.
 
 The machine-readable local record is intentionally ignored; the committed
 evidence is [`reproducibility_dry_run.md`](reproducibility_dry_run.md).
+
+## Final Candidate Packaging
+
+The 16 July packaging run used clean revision
+`212b296cf9988444e7b06531e0e23b71994411f1` and the accepted full OOF artifact
+revision `f22e1e66a1e06879d29905637ecbfe6c0cfc6604`.
+
+| Rank | Strategy | Cross-fitted Macro-F1 | Positive rows | SHA-256 | QA |
+|---:|---|---:|---:|---|---|
+| 1 | 0.65 LGB / 0.35 XGB | 0.837508 | 645,783 | `2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c` | passed; accepted hash match |
+| 2 | LightGBM | 0.837304 | 634,316 | `c9407c965ad7ba047441aa44952dab4681a13e23d32fb494b1c31545c83052e7` | passed |
+
+Both files contain 3,359,679 exact-order unique IDs and valid integer binary
+predictions. They disagree on 21,647 rows (`0.6443%`).
 
 ## External Or Conditional Evidence
 

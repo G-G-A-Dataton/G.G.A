@@ -8,7 +8,7 @@ This is the canonical offline-capable workflow. Run commands from the repository
 python scripts/run_production.py --stage verify
 ```
 
-The gate runs 102 regression/integration tests, verifies all 158 hash-locked
+The gate runs 108 regression/integration tests, verifies all 158 hash-locked
 packages from `requirements.lock`, checks the versioned data freeze in
 `configs/final_v1.json`, and validates all CSV relationships. Any mismatch
 stops the run.
@@ -116,3 +116,22 @@ is byte-identical to the accepted CSV.
 The accepted 16 July run passed 102 tests and reproduced SHA-256
 `2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c`.
 See [`docs/reproducibility_dry_run.md`](docs/reproducibility_dry_run.md).
+
+## 7. Final Candidate Packaging
+
+Build the two highest-ranked full submission candidates from the verified OOF
+and test probabilities:
+
+```bash
+python scripts/submission/run_final_candidate_set.py
+```
+
+The command requires a clean Git revision, revalidates the accepted delivery
+and full OOF artifacts, ranks candidates by cross-fitted grouped Macro-F1,
+streams both complete CSV files, and runs exact submission QA. It publishes
+only when Candidate 1 is byte-identical to the accepted delivery.
+
+Outputs are written under `outputs/final_candidates/`. The approved strategy,
+hashes, and QA evidence are recorded in
+[`docs/final_submission_candidates.md`](docs/final_submission_candidates.md)
+and [`docs/submission_qa_approval.md`](docs/submission_qa_approval.md).

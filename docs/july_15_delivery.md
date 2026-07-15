@@ -28,7 +28,7 @@
 - Training performance: `48:28.11`, peak RSS `3,765,812 KB`, no swap.
 - Final CSV: 3,359,679 rows, 645,783 positives (`19.2216%`), exact QA passed.
 - Selection/inference: `1:11.70`, peak RSS `701,084 KB`.
-- Current regression/integration suite: 102/102 passed.
+- Current regression/integration suite: 108/108 passed.
 
 ## Integrity Chain
 

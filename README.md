@@ -17,6 +17,10 @@ zinciri kontrollerini geçti. Ayrıntılı kanıt:
 ve tam submission dosyasını kabul edilen SHA-256 ile byte düzeyinde aynı üretti:
 [`docs/reproducibility_dry_run.md`](docs/reproducibility_dry_run.md).
 
+Aynı gün ekip görevleri `4/4` tamamlandı: blend birincil aday ve LightGBM yedek
+aday tam boyutta üretildi, ikisi de QA onayı aldı ve final rapor v2 güncellendi.
+Kanıt: [`docs/july_16_task_audit.md`](docs/july_16_task_audit.md).
+
 Bu değer yerel validasyon sonucudur, Kaggle leaderboard skoru değildir.
 
 ---
@@ -95,6 +99,7 @@ G.G.A/
 │   │   └── run_embedding_score_comparison.py # Embedding cosine feature etkisi
 │   ├── submission/              # Submission
 │   │   ├── run_full_submission_v2.py    # Tam submission dosyası üretimi
+│   │   ├── run_final_candidate_set.py    # En iyi iki aday + manifest + QA
 │   │   └── run_submission_qa.py         # Submission QA kontrolü
 │   └── data/                    # Veri hazırlama & kalite
 │       ├── run_hard_neg_comparison.py   # Hard vs random negative karşılaştırma

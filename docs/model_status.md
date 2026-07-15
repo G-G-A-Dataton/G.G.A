@@ -19,7 +19,7 @@ All scores recorded before the current contracts remain historical only. They us
 
 ## Accepted Full Run
 
-- 102 passing regression/integration tests.
+- 108 passing regression/integration tests.
 - 17,968 complete terms, 250,000 positives, and 1,877,700 candidates.
 - 316,893 BM25, 814,401 category, and 496,406 random negatives.
 - Five LightGBM plus five XGBoost grouped folds with 33 features.
@@ -37,6 +37,11 @@ re-ran all verification gates and rebuilt the complete submission byte for
 byte. This reproducibility acceptance does not change the 15 July model or its
 validation score; see
 [`reproducibility_dry_run.md`](reproducibility_dry_run.md).
+
+The 16 July final set retains the accepted blend as Candidate 1 and the
+next-best cross-fitted LightGBM model as Candidate 2. Both complete files pass
+exact QA; see [`final_submission_candidates.md`](final_submission_candidates.md)
+and [`submission_qa_approval.md`](submission_qa_approval.md).
 
 Reproduce or verify the accepted sequence from [`RUNBOOK.md`](../RUNBOOK.md).
 Only the Kaggle upload and leaderboard observation require external team-account
