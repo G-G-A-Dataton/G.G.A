@@ -1,7 +1,9 @@
 import contextlib
 import importlib
 import io
+import runpy
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import pandas as pd
@@ -24,6 +26,15 @@ class CompatibilityEntrypointTests(unittest.TestCase):
             for module_name in modules:
                 module = importlib.import_module(module_name)
                 self.assertTrue(callable(module.main))
+        self.assertEqual(captured.getvalue(), "")
+
+    def test_exported_notebook_entrypoints_are_import_safe(self):
+        notebook_dir = Path(__file__).resolve().parents[1] / "notebooks"
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
+            for path in sorted(notebook_dir.glob("*.py")):
+                namespace = runpy.run_path(str(path), run_name=f"audit_{path.stem}")
+                self.assertTrue(callable(namespace.get("main")), path.name)
         self.assertEqual(captured.getvalue(), "")
 
     def test_final_entrypoint_delegates_to_verified_shortlist(self):

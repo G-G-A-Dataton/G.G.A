@@ -423,9 +423,7 @@ def run_prediction_pipeline(args):
 
 def main(argv=None):
     args = parse_args(argv)
-    if args.mode == "predict":
-        return run_prediction_pipeline(args)
-    return None
+    return run_prediction_pipeline(args)
 
 
 if __name__ == "__main__":

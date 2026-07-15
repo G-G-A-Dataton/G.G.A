@@ -69,7 +69,7 @@ LGBM_PARAMS = {
     "data_random_seed": RANDOM_SEED,
     "deterministic": True,
     "force_col_wise": True,
-    "num_threads": -1,
+    "num_threads": 8,
     "verbosity": -1,
 }
 
