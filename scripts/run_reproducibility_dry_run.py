@@ -182,6 +182,19 @@ def materialize_runtime_assets(snapshot):
                 snapshot / "outputs" / filename,
             )
         )
+    # LFS-skip checkout leaves index stat data at pointer size. Re-adding the
+    # materialized files refreshes that cache; the cached diff must remain empty.
+    subprocess.run(
+        ["git", "add", "--", *[f"datasets/{name}" for name in DATA_FILES]],
+        cwd=snapshot,
+        check=True,
+    )
+    cached_diff = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=snapshot,
+    )
+    if cached_diff.returncode != 0:
+        raise RuntimeError("Materialized LFS data changed the clean clone index")
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=no"],
         cwd=snapshot,
