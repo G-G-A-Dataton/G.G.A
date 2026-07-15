@@ -29,7 +29,7 @@ def main(argv=None):
     python = sys.executable
     if args.stage in ("verify", "all"):
         run([python, "-m", "unittest", "discover", "-s", "tests", "-v"])
-        run([python, "scripts/verify_environment.py"])
+        run([python, "scripts/verify_environment.py", "--lock", "requirements.lock"])
         run([python, "scripts/data/verify_data_freeze.py"])
         run([python, "scripts/data/verify_pipeline.py"])
     if args.stage in ("train", "all"):
