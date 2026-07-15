@@ -2,7 +2,8 @@
 
 > [!CAUTION]
 > **Historical PoC only.** Synthetic embedding results and row-level CV scores
-> in this document are not production validation evidence.
+> in this document are not production validation evidence. The accepted 15 July
+> model does not use embeddings.
 
 **Hazırlayan:** Ömer Faruk Kara  
 **Tarih:** 12 Temmuz 2026  
@@ -21,6 +22,7 @@
 **Cosine separation:** `0.1346`  
 
 > [!WARNING]
-> Sonuclar sentetik cosine ile uretildi. Gercek embedding uretimi tamamlaninca (`run_term_embeddings.py` + `src/embedding_batch.py --target items`) bu scripti tekrar calistir.
+> Sonuclar sentetik cosine ile uretildi. A future promotion requires a real local
+> checkpoint, full hash-manifested matrices, and a positive grouped ablation.
 
 *CSV: `outputs/embedding_skor_kiyasi.csv`*

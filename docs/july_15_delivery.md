@@ -1,33 +1,53 @@
 # July 15 Delivery Record
 
-## Completed Engineering Deliverables
+## Accepted Engineering Deliverables
 
 | Area | Acceptance evidence |
 |---|---|
-| Data QA and final freeze | Five CSVs bound by row count, column order, bytes, and SHA-256 in `configs/final_v1.json` |
-| Negative generation | Exact per-query test-shaped quotas; complete positive exclusion; deterministic category/random sources |
-| Feature matrix | Unicode-safe exact matching, model-token signals, parsed attributes, TF-IDF, and global context ranks/gaps |
-| Validation | Five grouped folds; cross-fitted threshold and ensemble reports |
-| Model shortlist | Shared LightGBM/XGBoost OOF and out-of-core test prediction pipeline |
-| Ensemble decision | Promote the best held-out candidate; blend only when it beats both single models |
-| Submission | Disk-backed global features, bounded-memory inference, exact QA, atomic publication |
-| Embeddings | Verified checkpoints/manifests, memmap assembly, strict coverage, no synthetic fallback |
-| BM25 | Two-pass document-frequency build and compact NumPy posting lists |
-| Offline reproducibility | Exact Python/package pins, environment verifier, local-only optional embedding model |
-| One-command operation | `scripts/run_production.py` and canonical `RUNBOOK.md` |
+| Data QA and final freeze | Five CSVs bound by row count, schema, bytes, and SHA-256 in `configs/final_v1.json` |
+| Candidate generation | Exact test-shaped quotas; complete-positive exclusion; deterministic BM25/category/random sources |
+| Feature matrix | 23 base, 1 TF-IDF, and 9 global candidate-relative features |
+| Validation | Five grouped folds; cross-fitted threshold and ensemble selection |
+| Model shortlist | Five LightGBM and five XGBoost models with shared folds and features |
+| Model decision | Weighted blend selected only because it beats both single models cross-fitted |
+| Submission | Bounded-memory inference, exact QA, atomic publication, delivery manifest |
+| Error and feature analysis | Full hash-verified feature importance, threshold, comparison, and fold-external error taxonomy reports |
+| Embedding safety | Offline checkpoint/manifests, strict coverage, and no synthetic/zero fallback; not promoted without positive grouped evidence |
+| Reproducibility | Exact Python/package pins, clean Git revision, data/artifact hashes, one-command runner |
 
-## Measured Acceptance Runs
+## Full Production Result
 
-- 78 regression/integration tests passed.
-- Full data freeze verification passed for 5 files and 3,359,679 submission rows.
-- Environment verification passed for Python 3.13.5 and 17 pinned packages.
-- Canonical 20-term training smoke generated 2,396 candidates and five model folds.
-- Ten-term dual-model shortlist generated all 10 models, OOF/fold arrays, 200 predictions, and a QA-passing sample submission.
-- Compact BM25 indexed 20,000 real products in 2.71 seconds at about 140 MB peak RSS.
-- Medium shortlist acceptance used 300 complete terms, 33,048 candidates, ten models, and 50,000 QA-passing predictions in 2:08.17 at about 1.46 GB peak RSS.
+- Training revision: `f22e1e66a1e06879d29905637ecbfe6c0cfc6604`.
+- Training data: 17,968 terms, 250,000 positives, 1,627,700 negatives,
+  1,877,700 total candidates.
+- Negative sources: 316,893 BM25, 814,401 category, 496,406 random.
+- Cross-fitted Macro-F1: LightGBM `0.837304`, XGBoost `0.836820`,
+  weighted blend `0.837508`.
+- Deploy decision: LightGBM `0.65`, XGBoost `0.35`, threshold
+  `0.3718157097697258`.
+- Training performance: `48:28.11`, peak RSS `3,765,812 KB`, no swap.
+- Final CSV: 3,359,679 rows, 645,783 positives (`19.2216%`), exact QA passed.
+- Selection/inference: `1:11.70`, peak RSS `701,084 KB`.
+- Regression/integration suite: 95/95 passed.
 
-Detailed measurements are recorded in `docs/acceptance_runs.md`; plan-to-evidence mapping is recorded in `docs/july_15_task_audit.md`.
+## Integrity Chain
 
-## Explicitly Pending Runtime Evidence
+| Artifact | SHA-256 |
+|---|---|
+| Final CSV | `2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c` |
+| Delivery manifest | `972c0fbada3be885d993e13010c501c338ba86b8d8e62eccc8d3d51423c4a94e` |
+| OOF manifest | `fdb9582e4cef39572059b7731b44e473d78adbcfe75d08398c8c39e3258f9eb9` |
+| Ensemble decision | `7aab740498895f6b60df182cef5c2401c9b0173a152049224b7159395cdfccc4` |
 
-The full 1,877,700-row production training, full 3,359,679-row inference, optional 962,873-item sentence embeddings, and Kaggle leaderboard score are runtime jobs, not completed evidence in this repository state. They must not be represented as completed until their manifests and logs exist. Historical reports remain for provenance but are invalid for current model selection.
+Generated current reports are `ensemble_selection.md`,
+`ensemble_comparison.md`, `threshold_analysis.md`, `feature_importance.md`, and
+`error_taxonomy.md`. Older similarly named Turkish reports are retained only as
+explicitly invalidated historical records.
+
+## Evidence Boundary
+
+The repository contains a complete local 15 July candidate, not a Kaggle
+leaderboard observation. Upload and public/private scores require the authorized
+team account. Full sentence embeddings are optional and must not be described
+as part of this model unless a real checkpoint, complete matrices, and a
+positive grouped ablation are later archived.

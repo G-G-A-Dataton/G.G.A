@@ -5,7 +5,7 @@
 > former row-level CV and/or sampled-positive negative exclusion, and attribute
 > features were inactive against the real flat catalog format. Retain the rows
 > only as history; do not use their scores or thresholds for decisions. The
-> next valid run must follow [`model_status.md`](model_status.md).
+> accepted full run is EXP-010 and follows [`model_status.md`](model_status.md).
 
 Tüm model deneyleri bu dosyada kayıt altına alınır.  
 Her submission veya önemli local validation sonucu buraya eklenir.
@@ -25,6 +25,7 @@ Her submission veya önemli local validation sonucu buraya eklenir.
 
 | Deney | Tarih | Sahibi | Model | Neg. Strateji | Feature | CV F1 | LB F1 | Notlar |
 |---|---|---|---|---|---|---|---|---|
+| **EXP-010** | **15 Tem** | Tüm ekip | **LGBM/XGB blend** | **Test-shaped BM25/category/random** | **33** | **0.837508 grouped cross-fitted** | — | **Kabul edilen full run; LGB 0.65, XGB 0.35, threshold 0.37181571** |
 | EXP-001 | 3 Tem | Ömer Faruk | LightGBM | Random 3:1 / 5K poz | 7 temel | 0.9613 ± 0.0013 | — | Baseline v0, threshold opt. → 0.9621 |
 | EXP-002 | 4 Tem | Ömer Faruk | LightGBM | Random 3:1 / 5K poz | 9 (7 + demografik) | TBD | — | age_group_match + demographic_conflict |
 | EXP-003 | 4 Tem | Muhammed | LightGBM | Random 3:1 / 5K poz | 10 (9 + TF-IDF) | **0.9699 ± 0.0028** | — | TF-IDF #1 importance, +0.0086 kazanım |
@@ -39,6 +40,25 @@ Her submission veya önemli local validation sonucu buraya eklenir.
 ---
 
 ## Deney Detayları
+
+### EXP-010 — Accepted Full Production Run (15 Temmuz)
+
+| Parametre | Değer |
+|---|---|
+| Git revision | `f22e1e66a1e06879d29905637ecbfe6c0cfc6604` |
+| Training candidates | 1,877,700 across 17,968 complete terms |
+| Candidate sources | 250,000 positive; 316,893 BM25; 814,401 category; 496,406 random |
+| Validation | 5-fold `StratifiedGroupKFold`, group=`term_id` |
+| Models | 5 LightGBM + 5 XGBoost |
+| Feature count | 33 |
+| Cross-fitted scores | LGBM 0.837304; XGB 0.836820; blend **0.837508** |
+| Deploy parameters | LGBM 0.65; XGB 0.35; threshold 0.3718157097697258 |
+| Output | 3,359,679 rows; 645,783 positive; exact QA passed |
+| Runtime | training 48:28.11; selection/inference 1:11.70 |
+| Leaderboard | Not observed; team-account upload required |
+
+The OOF, decision, and submission are hash-bound. See
+[`july_15_delivery.md`](july_15_delivery.md) for the accepted integrity chain.
 
 ### EXP-001 — Baseline v0 (3 Temmuz)
 
@@ -130,9 +150,10 @@ query_cat_l1_overlap       (1,608)
 
 - Tüm deneyler `seed=42` ile tekrar üretilebilir
 - Local CV skoru Kaggle LB ile uyuşmayabilir — LB skoru her zaman not alınmalı
-- **EXP-001 best threshold: 0.45** — submission'larda bu kullanılacak
+- **EXP-001 threshold 0.45 is historical and must not be used for submissions.**
 - **EXP-003 best TF-IDF konfig: `ngram=(1,1), max_features=10_000`** — `run_baseline_tfidf.py` 8 Temmuz'da güncellendi
-- **EXP-006** — `notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` çalıştırılınca tablo güncellenecek
+- **EXP-006** is retained only as an invalidated historical plan; EXP-010 is the
+  accepted BM25/category/random result.
 
 ---
 

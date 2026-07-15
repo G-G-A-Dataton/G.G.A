@@ -3,6 +3,8 @@
 > [!NOTE]
 > Historical sprint record. Numeric model results require a rerun under the
 > current grouped validation, leakage-free sampling, and feature contracts.
+> That rerun is now EXP-010; see `july_15_delivery.md`. Pending statements below
+> describe the 9 July snapshot, not the current repository status.
 
 **Hazırlayan:** Ömer Faruk Kara (Kaptan)  
 **Tarih:** 9 Temmuz 2026  

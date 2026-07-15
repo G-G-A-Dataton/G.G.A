@@ -3,9 +3,9 @@
 > [!CAUTION]
 > **Historical, invalidated result.** The OOF inputs were generated under the
 > former validation and sampling contracts. The `0.7198` score and weights are
-> not approved for production and require a new grouped OOF run.
+> not approved for production.
 > Current runners write `docs/ensemble_comparison.md` and
-> `docs/ensemble_selection.md` from hash-verified shortlist artifacts.
+> `docs/ensemble_selection.md` from the accepted hash-verified full run.
 
 **Hazırlayan:** Ömer Faruk Kara  
 **Tarih:** 15 Temmuz 2026  

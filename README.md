@@ -4,6 +4,17 @@
 
 > T3 Vakfı, Sanayi ve Teknoloji Bakanlığı ve **Trendyol** iş birliğiyle düzenlenmektedir.
 
+## 15 Temmuz Üretim Durumu
+
+Tam üretim akışı 17.968 sorgu ve 1.877.700 eğitim adayı üzerinde çalıştırıldı.
+Beş LightGBM ve beş XGBoost modelinden seçilen `%65/%35` blend, sorgu bazlı
+cross-fitted Macro-F1 `0.837508` elde etti. `outputs/submission_v2.csv` tam
+3.359.679 satır için format, binary değer, benzersiz/tam ID sırası ve hash
+zinciri kontrollerini geçti. Ayrıntılı kanıt:
+[`docs/july_15_delivery.md`](docs/july_15_delivery.md).
+
+Bu değer yerel validasyon sonucudur, Kaggle leaderboard skoru değildir.
+
 ---
 
 ## 📌 Problem Tanımı
@@ -46,7 +57,7 @@ G.G.A/
 │   ├── data.py                  # Bellek dostu veri yükleme
 │   ├── features.py              # 23 lexical/demographic/category/attribute features
 │   ├── context_features.py      # 9 candidate-relative rank/gap features
-│   ├── candidate_sampling.py    # Test-shaped, leakage-free candidate generation
+│   ├── candidate_sampling.py    # BM25/category/random test-shaped candidates
 │   ├── modeling.py              # Shared grouped OOF/threshold/ensemble contracts
 │   ├── oof_artifacts.py         # Hash-verified shortlist artifact contract
 │   ├── out_of_core_features.py  # Global context features with bounded RAM
@@ -86,15 +97,16 @@ G.G.A/
 │       ├── run_tfidf_experiments.py     # TF-IDF parametre deneyleri
 │       └── verify_pipeline.py           # Pipeline doğrulama
 ├── docs/                        # Dokümantasyon & raporlar
-│   ├── experiment_log.md            # Tüm deney geçmişi (EXP-001 → EXP-009)
+│   ├── experiment_log.md            # Tarihsel deneyler + kabul edilen full run
 │   ├── feature_importance_raporu.md # Feature önem analizi (10 Temmuz)
 │   ├── threshold_analysis.md        # Current threshold diagnostics (generated)
-│   ├── experiment_matrix_v2.md      # Current grouped ablation (generated)
+│   ├── candidate_shift_analysis.md  # BM25 oranı dağılım analizi
 │   ├── ensemble_selection.md        # Final shortlist decision (generated)
-│   ├── error_taxonomy.md            # Current error taxonomy (generated)
+│   ├── feature_importance.md        # Current full-run importance (generated)
+│   ├── error_taxonomy.md            # Current full-run taxonomy (generated)
 │   ├── embedding_skor_kiyasi.md     # Embedding cosine etkisi (12 Temmuz)
 │   ├── teknik_rapor_v1.md           # EDA & feature bulguları (10 Temmuz)
-│   ├── rapor_yontem_v1.md           # Yöntem bölümü (13 Temmuz)
+│   ├── rapor_yontem_v1.md           # Kabul edilen yöntem (15 Temmuz)
 │   ├── offline_dependency.md        # Offline hazırlık rehberi (13 Temmuz)
 │   ├── sprint1_raporu.md            # Sprint 1 özeti
 │   ├── sprint2_raporu.md            # Sprint 2 özeti

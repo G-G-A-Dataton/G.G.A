@@ -2,6 +2,14 @@
 
 Bu doküman G.G.A takımının Kaggle datathon aşamasını, finalist adaylığı durumunda teslim edilecek çözüm paketini ve hackathon hazırlık sürecini profesyonel bir çalışma planına bağlar.
 
+> [!NOTE]
+> **15 Temmuz gerçekleşme durumu:** Gün 1-15 arasındaki 60 üye-görev hücresinin
+> 58'i repository kanıtı ile tamamlanmış veya teknik kararla kapatılmıştır
+> (`%96,7`). Kalan iki hücre Kaggle takım erişimi ve submission/public score
+> kaydıdır; yetkili takım hesabı gerektirir. Günlük kanıt ve kabul edilen full-run
+> sonucu için [`../july_15_task_audit.md`](../july_15_task_audit.md) kullanılır.
+> Bu planın ileriki günleri ve tarihsel görev metinleri değiştirilmeden korunur.
+
 Plan başlangıç tarihi **1 Temmuz 2026** olarak alınmıştır. Resmi Kaggle bitiş tarihi **17 Temmuz 2026** olduğu için ilk bölüm yoğun bir 17 günlük sprinttir. Devamındaki bölüm ise **18 Temmuz - 6 Eylül 2026** arası çözüm doğrulama, rapor ve hackathon hazırlığını kapsar.
 
 ---
