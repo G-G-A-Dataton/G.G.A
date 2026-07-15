@@ -63,6 +63,16 @@ class DataLoadingContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unresolved"):
             merge_pairs(pairs_path, terms, items)
 
+    def test_loader_rejects_git_lfs_pointer_instead_of_parsing_it(self):
+        path = os.path.join(self.temp_dir.name, "terms.csv")
+        with open(path, "w", encoding="utf-8") as pointer_file:
+            pointer_file.write(
+                "version https://git-lfs.github.com/spec/v1\n"
+                "oid sha256:deadbeef\nsize 123\n"
+            )
+        with self.assertRaisesRegex(RuntimeError, "Git LFS pointer"):
+            load_terms(path)
+
 
 if __name__ == "__main__":
     unittest.main()

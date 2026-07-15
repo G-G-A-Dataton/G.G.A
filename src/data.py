@@ -49,7 +49,7 @@ def _ensure_real_csv(file_path):
     böyle bir durum tespit edilirse kullanıcıya net bir rehber verir.
     """
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Sorgu dosyası bulunamadı: {file_path}")
+        raise FileNotFoundError(f"Veri dosyası bulunamadı: {file_path}")
 
     with open(file_path, "r", encoding="utf-8") as handle:
         first_line = handle.readline().strip()
