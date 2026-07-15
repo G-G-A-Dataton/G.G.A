@@ -86,7 +86,28 @@ def classify_error_signals(frame):
     )
 
 
-def _rebuild_candidates(manifest, items):
+def candidate_sampling_kwargs(manifest):
+    """Extract every deterministic reconstruction parameter from a manifest."""
+    config = manifest.get("candidate_sampling", {})
+    required = {
+        "strategy",
+        "min_candidates",
+        "dense_multiplier",
+        "bm25_hard_fraction",
+        "category_hard_fraction",
+        "bm25_top_n",
+        "bm25_max_df_ratio",
+        "random_state",
+    }
+    missing = sorted(required - set(config))
+    if missing:
+        raise ValueError(f"candidate sampling manifest is missing: {missing}")
+    if config["strategy"] != "test_shaped_bm25_category_random":
+        raise ValueError(f"unsupported candidate strategy: {config['strategy']}")
+    return {key: config[key] for key in required if key != "strategy"}
+
+
+def _rebuild_candidates(manifest, terms, items):
     positives = pd.read_csv(
         os.path.join(DATA_DIR, "training_pairs.csv"),
         dtype={
@@ -106,18 +127,21 @@ def _rebuild_candidates(manifest, items):
         selected = positives
     else:
         raise ValueError(f"unsupported training mode: {manifest['training_mode']}")
-    config = manifest["candidate_sampling"]
     candidates = build_test_shaped_training_set(
         selected,
         items,
+        terms_df=terms,
         positive_reference_df=positives,
-        min_candidates=config["min_candidates"],
-        dense_multiplier=config["dense_multiplier"],
-        category_hard_fraction=config["category_hard_fraction"],
-        random_state=config["random_state"],
+        **candidate_sampling_kwargs(manifest),
     )
     actual = candidate_distribution(candidates)
-    for field in ("terms", "rows", "positive_rows", "negative_rows"):
+    for field in (
+        "terms",
+        "rows",
+        "positive_rows",
+        "negative_rows",
+        "source_rows",
+    ):
         if actual[field] != manifest["training"][field]:
             raise ValueError(
                 f"reconstructed candidate {field} mismatch: "
@@ -250,8 +274,9 @@ def main(argv=None):
     score = macro_f1(y_true, predictions)
     error_mask = predictions != y_true
 
+    terms = load_terms(os.path.join(DATA_DIR, "terms.csv"))
     items = load_items(os.path.join(DATA_DIR, "items.csv"))
-    candidates = _rebuild_candidates(manifest, items)
+    candidates = _rebuild_candidates(manifest, terms, items)
     if not np.array_equal(candidates["label"].to_numpy(dtype=np.int8), y_true):
         raise ValueError("reconstructed candidate labels do not align with OOF rows")
     errors = candidates.loc[
@@ -261,7 +286,6 @@ def main(argv=None):
     errors["oof_probability"] = probabilities[error_mask]
     errors["error_type"] = np.where(errors["label"] == 0, "FP", "FN")
 
-    terms = load_terms(os.path.join(DATA_DIR, "terms.csv"))
     errors = errors.merge(
         terms, on="term_id", how="left", validate="many_to_one"
     ).merge(items, on="item_id", how="left", validate="many_to_one")
