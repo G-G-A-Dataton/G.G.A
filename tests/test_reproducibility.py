@@ -1,9 +1,12 @@
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.run_reproducibility_dry_run import (
     hardlink_or_copy,
+    interpreter_path,
     parse_test_count,
     sha256_file,
     write_reports,
@@ -16,6 +19,15 @@ from scripts.verify_environment import (
 
 
 class ReproducibilityTests(unittest.TestCase):
+    def test_interpreter_path_preserves_virtualenv_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            link = Path(directory) / "venv" / "bin" / "python"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(sys.executable)
+
+            self.assertEqual(interpreter_path(link), Path(os.path.abspath(link)))
+            self.assertNotEqual(interpreter_path(link), link.resolve())
+
     def test_lock_parser_reads_only_top_level_pins(self):
         with tempfile.TemporaryDirectory() as directory:
             lock_path = Path(directory) / "requirements.lock"

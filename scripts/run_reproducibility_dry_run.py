@@ -43,6 +43,14 @@ def parse_test_count(output):
     return int(match.group(1))
 
 
+def interpreter_path(value):
+    """Return an absolute interpreter path without resolving virtualenv links."""
+    path = Path(os.path.abspath(os.path.expanduser(os.fspath(value))))
+    if not path.is_file():
+        raise FileNotFoundError(f"Python interpreter does not exist: {path}")
+    return path
+
+
 def hardlink_or_copy(source, destination):
     """Materialize an external runtime asset without mutating the source."""
     source = Path(source)
@@ -118,9 +126,7 @@ def isolated_environment(python, workspace):
     env.pop("PYTHONPATH", None)
     env.update(
         {
-            "PATH": os.pathsep.join(
-                [str(Path(python).resolve().parent), "/usr/bin", "/bin"]
-            ),
+            "PATH": os.pathsep.join([str(Path(python).parent), "/usr/bin", "/bin"]),
             "PYTHONNOUSERSITE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
             "MPLCONFIGDIR": str(workspace / "matplotlib"),
@@ -280,9 +286,7 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    python = Path(args.python).resolve()
-    if not python.is_file():
-        raise FileNotFoundError(f"Python interpreter does not exist: {python}")
+    python = interpreter_path(args.python)
     revision = require_clean_revision()
     workspace = Path(tempfile.mkdtemp(prefix="gga-reproducibility-"))
     snapshot = workspace / "repository"
