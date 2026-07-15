@@ -8,9 +8,10 @@ This is the canonical offline-capable workflow. Run commands from the repository
 python scripts/run_production.py --stage verify
 ```
 
-The gate runs 95 regression/integration tests, verifies every pinned package,
-checks the versioned data freeze in `configs/final_v1.json`, and validates all
-CSV relationships. Any mismatch stops the run.
+The gate runs 102 regression/integration tests, verifies all 158 hash-locked
+packages from `requirements.lock`, checks the versioned data freeze in
+`configs/final_v1.json`, and validates all CSV relationships. Any mismatch
+stops the run.
 
 ## 2. Production Training
 
@@ -95,3 +96,23 @@ The local sentence-transformer checkpoint is not part of the accepted 15 July
 delivery. Do not describe embeddings as a production feature unless both full
 matrices and a positive grouped ablation are present. The final accepted model
 uses lexical, parsed attribute, TF-IDF, and candidate-relative features.
+
+## 6. Clean-Environment Reproducibility
+
+Install `requirements.lock` into a fresh Python 3.13.5 environment, then run:
+
+```bash
+PYTHONNOUSERSITE=1 venv/bin/python \
+  scripts/run_reproducibility_dry_run.py --python venv/bin/python
+```
+
+The runner requires a clean source worktree and creates a detached local clone.
+It disables Python user-site and online Hugging Face/Transformers access, then
+executes compile, tests, strict environment verification, frozen-data checks,
+pipeline checks, accepted-delivery validation, complete submission
+reproduction, and submission QA. The run passes only when the reproduced CSV
+is byte-identical to the accepted CSV.
+
+The accepted 16 July run passed 102 tests and reproduced SHA-256
+`2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c`.
+See [`docs/reproducibility_dry_run.md`](docs/reproducibility_dry_run.md).

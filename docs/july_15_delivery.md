@@ -28,7 +28,7 @@
 - Training performance: `48:28.11`, peak RSS `3,765,812 KB`, no swap.
 - Final CSV: 3,359,679 rows, 645,783 positives (`19.2216%`), exact QA passed.
 - Selection/inference: `1:11.70`, peak RSS `701,084 KB`.
-- Regression/integration suite: 95/95 passed.
+- Current regression/integration suite: 102/102 passed.
 
 ## Integrity Chain
 
@@ -43,6 +43,10 @@ Generated current reports are `ensemble_selection.md`,
 `ensemble_comparison.md`, `threshold_analysis.md`, `feature_importance.md`, and
 `error_taxonomy.md`. Older similarly named Turkish reports are retained only as
 explicitly invalidated historical records.
+
+The clean-environment acceptance performed on 16 July is recorded separately
+in [`reproducibility_dry_run.md`](reproducibility_dry_run.md); it reproduced the
+final CSV byte for byte without changing this delivery decision.
 
 ## Evidence Boundary
 

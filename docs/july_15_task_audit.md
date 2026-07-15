@@ -4,6 +4,10 @@ This is the authoritative mapping from every team-member task through 15 July
 2026 to repository evidence. Historical sprint documents preserve their
 original claims but do not override this audit.
 
+Muhammed's subsequent 16 July clean-environment task is tracked separately in
+[`july_16_task_audit.md`](july_16_task_audit.md); the historical counts below
+remain scoped to 1-15 July.
+
 ## Progress
 
 - Repository-verifiable or formally closed plan cells: **58/60 (96.7%)**.

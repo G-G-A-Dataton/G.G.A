@@ -13,6 +13,10 @@ cross-fitted Macro-F1 `0.837508` elde etti. `outputs/submission_v2.csv` tam
 zinciri kontrollerini geçti. Ayrıntılı kanıt:
 [`docs/july_15_delivery.md`](docs/july_15_delivery.md).
 
+16 Temmuz temiz ortam dry-run'ı, 158 hash-kilitli paketle `102/102` testi geçti
+ve tam submission dosyasını kabul edilen SHA-256 ile byte düzeyinde aynı üretti:
+[`docs/reproducibility_dry_run.md`](docs/reproducibility_dry_run.md).
+
 Bu değer yerel validasyon sonucudur, Kaggle leaderboard skoru değildir.
 
 ---
@@ -115,7 +119,8 @@ G.G.A/
 │   ├── embeddings/              # term_embeddings.npy, item_embeddings.npy
 │   └── *.csv                    # Deney sonuç tabloları
 ├── notebooks/                   # Jupyter Notebooklar
-├── requirements.txt
+├── requirements.txt              # Doğrudan bağımlılık pinleri
+├── requirements.lock             # Hash'li tam transitif ortam kilidi
 └── README.md
 ```
 
@@ -218,13 +223,14 @@ source venv/bin/activate        # Linux / macOS
 
 ```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
 ```
 
 ### Adım 4: Kurulumu Doğrula
 
 ```bash
-python scripts/verify_environment.py
+PYTHONNOUSERSITE=1 python scripts/verify_environment.py \
+  --lock requirements.lock
 ```
 
 ### 📦 Temel Bağımlılıklar
@@ -243,7 +249,10 @@ python scripts/verify_environment.py
 | `matplotlib` | 3.11.0 | Görselleştirme |
 | `seaborn` | 0.13.2 | İstatistiksel görselleştirme |
 
-> Tüm bağımlılıkların tam listesi için [requirements.txt](requirements.txt) dosyasına bakınız.
+> Doğrudan bağımlılıklar [requirements.txt](requirements.txt), kurulabilir tam
+> ortam ise [requirements.lock](requirements.lock) dosyasında tutulur. Offline
+> wheelhouse ve temiz ortam doğrulaması için
+> [offline dependency rehberini](docs/offline_dependency.md) kullanın.
 
 ---
 

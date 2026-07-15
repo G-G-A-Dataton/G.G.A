@@ -6,9 +6,9 @@ Only reproducible local evidence is recorded here. Sample scores validate pipeli
 
 | Check | Result |
 |---|---|
-| Unit/integration suite | 95/95 passed |
+| Unit/integration suite | 102/102 passed |
 | Python | 3.13.5 verified |
-| Direct package pins | 17/17 exact |
+| Hash-locked environment | 158/158 exact; direct pins preserved |
 | Frozen competition files | 5/5 row/schema/size/SHA-256 checks passed |
 | Full submission input | 3,359,679 rows and sample ID order verified |
 
@@ -113,6 +113,25 @@ were 2,253, 1,901, 2,070, 1,963, and 2,232.
 
 The full OOF consumer independently reloaded and verified all hashes, source
 data, feature columns, fold IDs, array shapes, and full-mode row counts.
+
+## Clean-Environment Reproducibility
+
+The 16 July dry-run executed from clean revision
+`ec619e29702503bbe4db8147a4c30a0a10daecda` in a fresh Python 3.13.5 virtual
+environment with all 158 hash-locked packages installed.
+
+| Field | Result |
+|---|---|
+| Source isolation | Detached local clone; clean tracked state |
+| Network-dependent model access | Disabled |
+| User-site packages | Disabled |
+| Compile / tests | passed / 102 of 102 passed |
+| Data freeze / pipeline / delivery manifest | passed / passed / passed |
+| Reproduced submission | 3,359,679 rows; 645,783 positives; QA passed |
+| Byte identity | accepted and reproduced SHA-256 both `2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c` |
+
+The machine-readable local record is intentionally ignored; the committed
+evidence is [`reproducibility_dry_run.md`](reproducibility_dry_run.md).
 
 ## External Or Conditional Evidence
 
