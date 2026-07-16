@@ -3,6 +3,7 @@
 import argparse
 import gc
 import os
+import re
 import sys
 
 import lightgbm as lgb
@@ -120,6 +121,17 @@ def parse_args(argv=None):
         "--bm25-max-df-ratio", type=float, default=BM25_MAX_DF_RATIO
     )
     parser.add_argument("--artifact-dir", default=None)
+    parser.add_argument("--data-dir", default=DATA_DIR)
+    parser.add_argument(
+        "--candidate-output",
+        default=None,
+        help="Optional CSV path for the exact generated training candidates",
+    )
+    parser.add_argument(
+        "--code-revision",
+        default=None,
+        help="40-character source revision for delivery packages without .git",
+    )
     return parser.parse_args(argv)
 
 
@@ -144,11 +156,36 @@ def _xgb_predict(model, matrix):
     return model.predict(matrix, iteration_range=iteration_range)
 
 
-def prepare_training_data(args, artifact_dir, sample_terms):
-    terms = load_terms(os.path.join(DATA_DIR, "terms.csv"))
-    items = load_items(os.path.join(DATA_DIR, "items.csv"))
+def _resolve_code_revision(value):
+    if value is None:
+        return git_revision()
+    if not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise ValueError("--code-revision must be a 40-character lowercase Git SHA")
+    return value
+
+
+def _export_candidates(candidates, output_path):
+    output_path = os.path.abspath(output_path)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    temporary_path = output_path + ".tmp"
+    try:
+        candidates[["term_id", "item_id", "label", "neg_source"]].to_csv(
+            temporary_path,
+            index=False,
+        )
+        os.replace(temporary_path, output_path)
+    except Exception:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+        raise
+    return output_path
+
+
+def prepare_training_data(args, artifact_dir, sample_terms, data_dir=DATA_DIR):
+    terms = load_terms(os.path.join(data_dir, "terms.csv"))
+    items = load_items(os.path.join(data_dir, "items.csv"))
     positives = pd.read_csv(
-        os.path.join(DATA_DIR, "training_pairs.csv"),
+        os.path.join(data_dir, "training_pairs.csv"),
         dtype={"id": "string", "term_id": "string", "item_id": "string", "label": "int8"},
     )
     if len(positives) != 250_000 or not (positives["label"] == 1).all():
@@ -177,6 +214,10 @@ def prepare_training_data(args, artifact_dir, sample_terms):
         ),
         random_state=RANDOM_SEED,
     )
+    candidate_output = getattr(args, "candidate_output", None)
+    if candidate_output:
+        exported_path = _export_candidates(candidates, candidate_output)
+        print(f"  generated candidates: {exported_path}")
     merged = candidates.merge(
         terms, on="term_id", how="left", validate="many_to_one"
     ).merge(items, on="item_id", how="left", validate="many_to_one")
@@ -305,7 +346,7 @@ def _train_oof(data, args, artifact_dir):
     )
 
 
-def _stream_test_predictions(data, models, args, artifact_dir, test_rows):
+def _stream_test_predictions(data, models, args, artifact_dir, test_rows, data_dir):
     lgbm_models, xgb_models = models
     temp_lgbm = os.path.join(artifact_dir, "test_lgbm.npy.tmp")
     temp_xgb = os.path.join(artifact_dir, "test_xgb.npy.tmp")
@@ -320,7 +361,7 @@ def _stream_test_predictions(data, models, args, artifact_dir, test_rows):
     offset = 0
     try:
         base_path, codes_path = build_base_feature_store(
-            os.path.join(DATA_DIR, "submission_pairs.csv"),
+            os.path.join(data_dir, "submission_pairs.csv"),
             data["terms"],
             data["items"],
             data["vectorizer"],
@@ -388,6 +429,19 @@ def main(argv=None):
             else PRODUCTION_ARTIFACT_DIR
         )
     )
+    data_dir = os.path.abspath(getattr(args, "data_dir", DATA_DIR))
+    required_data = [
+        os.path.join(data_dir, filename)
+        for filename in (
+            "terms.csv",
+            "items.csv",
+            "training_pairs.csv",
+            "submission_pairs.csv",
+        )
+    ]
+    missing_data = [path for path in required_data if not os.path.isfile(path)]
+    if missing_data:
+        raise FileNotFoundError(f"Missing competition data files: {missing_data}")
     if (sample_terms or test_sample) and os.path.realpath(
         artifact_dir
     ) == os.path.realpath(PRODUCTION_ARTIFACT_DIR):
@@ -398,7 +452,7 @@ def main(argv=None):
         raise ValueError(f"--test-sample cannot exceed {EXPECTED_TEST_ROWS}")
 
     print("[1/5] Preparing shared test-shaped training matrix")
-    data = prepare_training_data(args, artifact_dir, sample_terms)
+    data = prepare_training_data(args, artifact_dir, sample_terms, data_dir)
     print("[2/5] Training grouped LightGBM and XGBoost OOF models")
     (
         oof_lgbm,
@@ -426,7 +480,7 @@ def main(argv=None):
 
     print("[4/5] Streaming test predictions to memory-mapped arrays")
     _stream_test_predictions(
-        data, (lgb_models, xgb_models), args, artifact_dir, test_rows
+        data, (lgb_models, xgb_models), args, artifact_dir, test_rows, data_dir
     )
     _atomic_save(os.path.join(artifact_dir, "oof_lgbm.npy"), oof_lgbm)
     _atomic_save(os.path.join(artifact_dir, "oof_xgb.npy"), oof_xgb)
@@ -463,11 +517,11 @@ def main(argv=None):
         },
         positive_reference_rows=len(data["positives"]),
         source_data_sha256={
-            name: sha256_file(os.path.join(DATA_DIR, name)) for name in source_names
+            name: sha256_file(os.path.join(data_dir, name)) for name in source_names
         },
         model_files=model_files,
         support_files=[os.path.basename(data["vectorizer_path"])],
-        code_revision=git_revision(),
+        code_revision=_resolve_code_revision(getattr(args, "code_revision", None)),
         feature_columns=MODEL_FEATURE_COLS,
         training_config={
             "random_seed": RANDOM_SEED,

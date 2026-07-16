@@ -8,7 +8,7 @@ This is the canonical offline-capable workflow. Run commands from the repository
 python scripts/run_production.py --stage verify
 ```
 
-The gate runs 108 regression/integration tests, verifies all 158 hash-locked
+The gate runs 114 regression/integration tests, verifies all 158 hash-locked
 packages from `requirements.lock`, checks the versioned data freeze in
 `configs/final_v1.json`, and validates all CSV relationships. Any mismatch
 stops the run.
@@ -135,3 +135,25 @@ Outputs are written under `outputs/final_candidates/`. The approved strategy,
 hashes, and QA evidence are recorded in
 [`docs/final_submission_candidates.md`](docs/final_submission_candidates.md)
 and [`docs/submission_qa_approval.md`](docs/submission_qa_approval.md).
+
+## 8. Official Finalist Entry Points
+
+The organizer-facing interface is independent of repository-relative dataset
+and output paths:
+
+```bash
+bash step1.sh
+bash step2.sh \
+  --competition_data_path competition_data/ \
+  --extra_data_path extra_generated_data/ \
+  --model_dump_path new_trained_models/
+bash step3.sh \
+  --model_dump_path models/ \
+  --competition_data_path competition_data/ \
+  --out_path submission.csv
+```
+
+Step 2 exports every generated positive/negative candidate and its manifest.
+Step 3 loads all ten fold models and rebuilds features from the supplied data;
+it does not turn cached test probabilities into a nominal inference result.
+See [`SOLUTION_README.md`](SOLUTION_README.md) for the complete contract.

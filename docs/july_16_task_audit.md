@@ -45,7 +45,7 @@ Both final CSV files passed bounded-memory checks for:
 - no accidental index column;
 - stable SHA-256 and recorded class balance.
 
-The current regression/integration suite has **108/108 passing tests**. The
+The current regression/integration suite has **114/114 passing tests**. The
 configuration test also ensures `configs/final_v1.json` cannot silently drift
 from the accepted BM25/category/random production candidate contract.
 
