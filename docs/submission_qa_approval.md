@@ -20,8 +20,8 @@ Both candidates passed bounded-memory validation for:
 
 | Rank | File | Rows | Positives | SHA-256 |
 |---:|---|---:|---:|---|
-| 1 | `outputs/final_candidates/submission_candidate_1_weighted_blend.csv` | 3,359,679 | 625,585 | `d40b0338a5593e00563662a2fa5376e967c8e64f8b6490d4d5864a93a0a6281c` |
-| 2 | `outputs/final_candidates/submission_candidate_2_xgboost.csv` | 3,359,679 | 622,915 | `f1ea967ec9e63e7af4aa384434ead8996cca022a04b268482e47bb5e33f59a45` |
+| 1 | `outputs/final_candidates/submission_candidate_1_weighted_blend.csv` | 3,359,679 | 645,783 | `2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c` |
+| 2 | `outputs/final_candidates/submission_candidate_2_lightgbm.csv` | 3,359,679 | 634,316 | `c9407c965ad7ba047441aa44952dab4681a13e23d32fb494b1c31545c83052e7` |
 
 Candidate 1 additionally matches the accepted delivery SHA-256 byte for
 byte. Any later modification invalidates this approval and requires the

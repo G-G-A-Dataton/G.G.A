@@ -148,7 +148,7 @@ and submission artifacts are protected by versioned SHA-256 manifests.
 
 The 16 July clean-environment dry-run used a detached clone, disabled Python
 user-site and online model access, passed all then-current tests and data gates,
-and rebuilt Candidate 1 byte for byte. The current suite contains 108 tests,
+and rebuilt Candidate 1 byte for byte. The current suite contains 114 tests,
 including a contract that keeps `configs/final_v1.json` synchronized with the
 accepted candidate sampler.
 
@@ -159,6 +159,9 @@ python scripts/run_production.py --stage verify
 python scripts/run_production.py --stage train
 python scripts/run_production.py --stage predict
 python scripts/submission/run_final_candidate_set.py
+bash step1.sh
+bash step2.sh --competition_data_path competition_data/ --extra_data_path extra_generated_data/ --model_dump_path new_trained_models/
+bash step3.sh --model_dump_path models/ --competition_data_path competition_data/ --out_path submission.csv
 ```
 
 Detailed evidence is available in [`acceptance_runs.md`](acceptance_runs.md),

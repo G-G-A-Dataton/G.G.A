@@ -6,7 +6,7 @@ Only reproducible local evidence is recorded here. Sample scores validate pipeli
 
 | Check | Result |
 |---|---|
-| Current unit/integration suite | 108/108 passed |
+| Current unit/integration suite | 114/114 passed |
 | Python | 3.13.5 verified |
 | Hash-locked environment | 158/158 exact; direct pins preserved |
 | Frozen competition files | 5/5 row/schema/size/SHA-256 checks passed |
@@ -113,6 +113,14 @@ were 2,253, 1,901, 2,070, 1,963, and 2,232.
 
 The full OOF consumer independently reloaded and verified all hashes, source
 data, feature columns, fold IDs, array shapes, and full-mode row counts.
+
+## Full Offline Model-Loading Inference
+
+The 17 July `step3` acceptance loaded all ten serialized fold models and the
+TF-IDF vectorizer, rebuilt the complete test feature matrix out of core, and
+predicted 3,359,679 rows without cached test probabilities. It produced
+645,783 positives and the exact accepted SHA-256
+`2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c`.
 
 ## Clean-Environment Reproducibility
 
