@@ -41,6 +41,8 @@ exact training candidate matrix, writes it as
 `generated_training_candidates.csv`, trains five LightGBM and five XGBoost
 grouped folds, saves the TF-IDF vectorizer and OOF/test arrays, and recomputes
 the deploy decision. SHA-256 manifests bind all generated data and artifacts.
+`source_revision.txt` identifies the exact delivery-code revision even when a
+Kaggle dataset copy does not include Git metadata.
 
 No external, synthetic, pseudo-labeled, paid-service, generative-model, or
 embedding data is used by the accepted solution. All negative examples are
