@@ -22,10 +22,10 @@ is not materialized as one pandas frame.
 - 158 transitive Python distributions pinned with hashes in
   `requirements.lock`
 - LightGBM `4.6.0`
-- XGBoost `3.0.2`
-- scikit-learn `1.7.0`
-- pandas `2.3.0`
-- NumPy `2.3.1`
+- XGBoost `3.3.0`
+- scikit-learn `1.9.0`
+- pandas `3.0.3`
+- NumPy `2.5.0`
 
 `step1.sh` creates and verifies this environment. `step3.sh` explicitly sets
 offline flags and does not download models, tokenizers, or data.
