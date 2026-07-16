@@ -4,16 +4,16 @@ This report separates held-out model-selection performance from deploy parameter
 
 | Candidate | Cross-fitted Macro-F1 |
 |---|---:|
-| LightGBM | 0.837304 |
-| XGBoost | 0.836820 |
-| Weighted blend | 0.837508 |
+| LightGBM | 0.836825 |
+| XGBoost | 0.836911 |
+| Weighted blend | 0.837374 |
 
 ## Deploy Parameters
 
 - Selected candidate: `weighted_blend`
-- LightGBM weight: `0.6500`
-- XGBoost weight: `0.3500`
-- Threshold: `0.37181571`
-- Candidate positive rate: `19.2216%`
+- LightGBM weight: `0.4500`
+- XGBoost weight: `0.5500`
+- Threshold: `0.38757889`
+- Candidate positive rate: `18.6204%`
 
 The all-OOF selection score is recorded for reproducibility only; it is not an unbiased validation estimate.
