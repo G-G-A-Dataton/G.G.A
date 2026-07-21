@@ -1,0 +1,22 @@
+faiss:
+  n_lists: 256
+  n_probes: 32
+  index_type: "IVFFlat"
+  index_path: "outputs/indexes/faiss_items.index"
+
+bm25:
+  max_df_ratio: 0.3
+  k1: 1.5
+  b: 0.75
+  index_path: "outputs/indexes/bm25_index.pkl"
+
+fusion:
+  method: "rrf"
+  rrf_k: 60
+  bm25_weight: 0.5
+  dense_weight: 0.5
+
+top_k:
+  bm25: 200
+  dense: 200
+  merged: 100

@@ -16,8 +16,8 @@ def expected_requirements(path):
     requirements = {}
     with open(path, encoding="utf-8") as requirements_file:
         for raw_line in requirements_file:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
+            line = raw_line.split("#")[0].strip()
+            if not line:
                 continue
             match = re.fullmatch(r"([A-Za-z0-9_.-]+)==([^\s]+)", line)
             if not match:

@@ -1,0 +1,10 @@
+manifest_path: "outputs/model_manifest_v2.json"
+oof_manifest_path: "outputs/ensemble_artifacts/oof_manifest.json"
+model_dir: "outputs"
+batch_size: 100000
+expected_submission_rows: 3359679
+expected_positive_rows: 250000
+expected_training_rows: 1877700
+expected_training_terms: 17968
+validate_output_format: true
+atomic_write: true

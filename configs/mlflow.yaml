@@ -1,0 +1,6 @@
+tracking_uri: "mlflow/mlruns"
+experiment_name: "gga_product_matching"
+run_tags:
+  project: "G.G.A"
+  competition: "TEKNOFEST2026"
+  team: "G.G.A Dataton"

@@ -14,6 +14,8 @@ import xgboost as xgb
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+from src.experiment_tracker import ExperimentTracker
+
 from scripts.training.run_train_full_v2 import git_revision, sha256_file
 from src.candidate_sampling import (
     build_test_shaped_training_set,
@@ -382,6 +384,49 @@ def main(argv=None):
         feature_columns=MODEL_FEATURE_COLS,
     )
     print(f"  manifest: {manifest_path}")
+
+    # ── MLflow / JSON deney takibi ─────────────────────────────────────
+    run_name = (
+        f"shortlist_sample{sample_terms}" if sample_terms else "shortlist_full"
+    )
+    try:
+        tracker = ExperimentTracker.from_config(
+            os.path.join(PROJECT_ROOT, "configs", "mlflow.yaml")
+        )
+        with tracker.start_run(run_name=run_name):
+            tracker.log_params({
+                "n_splits": N_SPLITS,
+                "random_seed": RANDOM_SEED,
+                "sample_terms": sample_terms or "full",
+                "test_rows": test_rows,
+                "num_boost_round": getattr(args, "num_boost_round", 1_200),
+                "early_stopping_rounds": getattr(args, "early_stopping_rounds", 80),
+                "training_mode": "sample" if sample_terms else "full",
+                "lgbm_num_leaves": LGBM_PARAMS["num_leaves"],
+                "lgbm_learning_rate": LGBM_PARAMS["learning_rate"],
+                "xgb_max_depth": XGB_PARAMS["max_depth"],
+                "xgb_learning_rate": XGB_PARAMS["learning_rate"],
+                "n_features": len(MODEL_FEATURE_COLS),
+                "artifact_dir": artifact_dir,
+            })
+            tracker.log_metrics({
+                "lgbm_cross_fitted_macro_f1": lgb_report["cross_fitted_macro_f1"],
+                "lgbm_fold_macro_f1_mean": lgb_report["fold_macro_f1_mean"],
+                "lgbm_fold_macro_f1_std": lgb_report["fold_macro_f1_std"],
+                "lgbm_deploy_threshold": lgb_report["deploy_threshold"],
+                "xgb_cross_fitted_macro_f1": xgb_report["cross_fitted_macro_f1"],
+                "xgb_fold_macro_f1_mean": xgb_report["fold_macro_f1_mean"],
+                "xgb_fold_macro_f1_std": xgb_report["fold_macro_f1_std"],
+                "xgb_deploy_threshold": xgb_report["deploy_threshold"],
+                "blend_cross_fitted_macro_f1": blend_report["cross_fitted_macro_f1"],
+                "blend_deploy_threshold": blend_report["deploy_threshold"],
+                "blend_lgbm_weight": blend_report["deploy_first_model_weight"],
+            })
+            tracker.log_artifact(manifest_path)
+    except Exception as _tracker_exc:  # noqa: BLE001
+        print(f"  [tracker] Kayıt sırasında hata (devam ediliyor): {_tracker_exc}")
+    # ───────────────────────────────────────────────────────────────────
+
     return manifest_path
 
 

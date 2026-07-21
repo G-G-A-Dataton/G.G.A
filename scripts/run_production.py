@@ -17,7 +17,9 @@ def run(command):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Run verified production workflow")
     parser.add_argument(
-        "--stage", choices=["verify", "train", "predict", "all"], default="all"
+        "--stage",
+        choices=["verify", "train", "predict", "benchmark", "ablation", "full-e2e", "all"],
+        default="all",
     )
     parser.add_argument(
         "--pipeline",
@@ -30,22 +32,33 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     python = sys.executable
-    if args.stage in ("verify", "all"):
-        run([python, "-m", "unittest", "discover", "-s", "tests", "-v"])
+
+    if args.stage in ("verify", "all", "full-e2e"):
+        run([python, "-m", "pytest", "tests", "-v"])
         verify_cmd = [python, "scripts/verify_environment.py"]
         if args.ignore_env_mismatch:
             verify_cmd.append("--ignore-mismatch")
         run(verify_cmd)
         run([python, "scripts/data/verify_data_freeze.py"])
         run([python, "scripts/data/verify_pipeline.py"])
-    if args.stage in ("train", "all"):
+        run([python, "scripts/data/run_data_quality_report.py"])
+
+    if args.stage in ("train", "all", "full-e2e"):
         training_script = (
             "scripts/training/run_model_shortlist.py"
             if args.pipeline == "shortlist"
             else "scripts/training/run_train_full_v2.py"
         )
         run([python, training_script])
-    if args.stage in ("predict", "all"):
+
+    if args.stage in ("benchmark", "full-e2e"):
+        run([python, "scripts/training/run_hybrid_reranker_benchmark.py"])
+        run([python, "scripts/analysis/run_segment_report.py"])
+
+    if args.stage in ("ablation", "full-e2e"):
+        run([python, "scripts/analysis/run_ablation_matrix.py"])
+
+    if args.stage in ("predict", "all", "full-e2e"):
         if args.pipeline == "shortlist":
             run(
                 [

@@ -1,0 +1,36 @@
+name: G.G.A Production CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Pytest Unit & Integration Tests
+        run: |
+          python -m pytest tests/ -v --tb=short
+
+      - name: Run Pipeline Integrity & Data Freeze Verification
+        run: |
+          python scripts/verify_environment.py --ignore-mismatch
+          python scripts/data/verify_data_freeze.py
+          python scripts/data/verify_pipeline.py
+          python scripts/data/run_data_quality_report.py
