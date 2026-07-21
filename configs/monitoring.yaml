@@ -1,0 +1,10 @@
+psi_threshold: 0.1  # PSI > 0.1: Minor Drift, > 0.25: Significant Drift
+ks_alpha: 0.05       # Kolmogorov-Smirnov test significance level
+n_bins: 10
+features_to_monitor:
+  - "query_title_overlap"
+  - "query_title_coverage"
+  - "tfidf_cosine"
+  - "query_category_overlap"
+  - "embedding_cosine"
+  - "prediction_proba"

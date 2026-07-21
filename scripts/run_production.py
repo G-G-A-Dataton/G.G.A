@@ -34,7 +34,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     python = sys.executable
 
-    if args.stage in ("verify", "all"):
+    if args.stage in ("verify", "all", "full-e2e"):
         run([python, "-m", "pytest", "tests/", "-v"])
         verify_cmd = [python, "scripts/verify_environment.py"]
         if args.ignore_env_mismatch:
@@ -48,13 +48,7 @@ def main(argv=None):
         run([python, "scripts/data/verify_pipeline.py"])
         run([python, "scripts/data/run_data_quality_report.py"])
 
-    if args.stage in ("benchmark", "full-e2e"):
-        run([python, "scripts/training/run_hybrid_reranker_benchmark.py"])
-
-    if args.stage in ("ablation", "full-e2e"):
-        run([python, "scripts/analysis/run_ablation_matrix.py"])
-
-    if args.stage in ("train", "all"):
+    if args.stage in ("train", "all", "full-e2e"):
         training_script = (
             "scripts/training/run_model_shortlist.py"
             if args.pipeline == "shortlist"
@@ -62,7 +56,14 @@ def main(argv=None):
         )
         run([python, training_script])
 
-    if args.stage in ("predict", "all"):
+    if args.stage in ("benchmark", "full-e2e"):
+        run([python, "scripts/training/run_hybrid_reranker_benchmark.py"])
+        run([python, "scripts/analysis/run_segment_report.py"])
+
+    if args.stage in ("ablation", "full-e2e"):
+        run([python, "scripts/analysis/run_ablation_matrix.py"])
+
+    if args.stage in ("predict", "all", "full-e2e"):
         if args.pipeline == "shortlist":
             run(
                 [

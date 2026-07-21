@@ -50,6 +50,7 @@ from collections import Counter, defaultdict
 import numpy as np
 import pandas as pd
 
+from src.retrieval.bm25 import BM25Index
 from src.text_utils import normalize_for_matching
 
 
