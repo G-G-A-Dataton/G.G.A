@@ -23,7 +23,8 @@ G.G.A/
 │   ├── features.py          # Özellik çıkarma (TF-IDF, overlap, vb.)
 │   ├── train.py             # Model eğitimi
 │   └── predict.py           # Tahmin ve submission üretimi
-├── requirements.txt         # Kilitlenmiş bağımlılık paketi listesi
+├── requirements.txt         # Doğrudan bağımlılık pinleri
+├── requirements.lock        # Hash'li tam transitif ortam kilidi
 └── README.md                # Kurulum ve genel proje tanıtımı
 ```
 
@@ -77,4 +78,6 @@ Herhangi bir tahmin dosyası Kaggle'a yüklenmeden önce aşağıdaki kontroller
 
 1.  **Sabit Seed:** Rastgelelik içeren tüm süreçlerde (veri bölme, negatif örnekleme, model eğitimi vb.) rastgelelik tohumu (seed) olarak `42` kullanılacaktır.
 2.  **Modüler Yapı:** Notebook'larda doğrulanan kodlar hızlıca `src/` altına taşınacak ve parametrik fonksiyonlar haline getirilecektir.
-3.  **Çevre Tutarlılığı:** Her yeni kütüphane ekleme ihtiyacında `requirements.txt` güncellenecektir.
+3.  **Çevre Tutarlılığı:** Her yeni kütüphane ekleme ihtiyacında
+    `requirements.txt` ve hash'li `requirements.lock` birlikte güncellenecek;
+    `scripts/verify_environment.py --lock requirements.lock` çalıştırılacaktır.

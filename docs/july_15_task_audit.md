@@ -1,26 +1,58 @@
-# July 13-15 Task Audit
+# July 1-15 Task Audit
 
-This audit maps the team plan to executable evidence as of 13 July 2026.
+This is the authoritative mapping from every team-member task through 15 July
+2026 to repository evidence. Historical sprint documents preserve their
+original claims but do not override this audit.
 
-| Date / owner deliverable | Status | Canonical evidence |
+Muhammed's subsequent 16 July clean-environment task is tracked separately in
+[`july_16_task_audit.md`](july_16_task_audit.md); the historical counts below
+remain scoped to 1-15 July.
+
+## Progress
+
+- Repository-verifiable or formally closed plan cells: **58/60 (96.7%)**.
+- Local engineering acceptance: **100%**.
+- External team-account actions: **2/60** (`Kaggle team/access confirmation`
+  and `Kaggle upload/public score record`). These cannot be inferred locally.
+- Full sentence embeddings are a conditional experiment, not an accepted model
+  dependency. The v1 batch/cosine/checkpoint contract is complete; promotion
+  requires a real local checkpoint and a positive grouped ablation.
+
+## Day-By-Day Evidence
+
+| Day | Status | Team-member deliverables and evidence |
 |---|---|---|
-| 13 Jul: LGBM/XGBoost/ensemble candidate table | Code complete, medium run passed | `run_model_shortlist.py`, `run_ensemble_comparison.py`, `acceptance_runs.md` |
-| 13 Jul: report method section | Complete | `docs/rapor_yontem_v1.md` |
-| 13 Jul: submission feature dry-run | Complete at 50K rows | out-of-core stores and medium QA run |
-| 13 Jul: offline dependency list | Complete | `docs/offline_dependency.md`, exact environment verifier |
-| 14 Jul: model shortlist and OOF export | Code complete, medium run passed | ten models, OOF labels/folds, test arrays, hash manifest |
-| 14 Jul: threshold scan | Complete without fold leakage | `run_threshold_analysis.py`, shared cross-fitted selection |
-| 14 Jul: memory/time risk measurement | Complete at medium scale | 2:08.17 wall time, 1.46 GB peak RSS |
-| 14 Jul: one-command runbook | Complete | `scripts/run_production.py`, `RUNBOOK.md` |
-| 15 Jul: joint ensemble/threshold optimization | Complete | `run_ensemble_optimization.py`; single models and blend compete on cross-fitted Macro-F1 |
-| 15 Jul: local/public score interpretation | Local methodology complete; external score absent | local score boundary documented; no Kaggle score is fabricated |
-| 15 Jul: final training data freeze | Complete | `configs/final_v1.json`, five SHA-256 hashes |
-| 15 Jul: environment/reproducibility notes | Complete | `.python-version`, exact requirements, offline guide, clean-worktree artifact rule |
+| 1 Jul | Local complete; one external check | Ömer: Kaggle team/access is external. Ahmet: `EDA_notlari_v0.md`. Mustafa: validated merge/data-loading contract. Muhammed: `REPO_CALISMA_STANDARDI.md`, repository layout, and experiment log. |
+| 2 Jul | Complete | Ömer: Macro-F1 and grouped validation contracts in `src/metrics.py`. Ahmet: `EDA_on_raporu.md`. Mustafa: duplicate/reference/schema checks in the data verifier. Muhammed: exact submission validator and tests. |
+| 3 Jul | Complete | Ömer: LightGBM baseline path. Ahmet: lexical/brand/category features. Mustafa: deterministic random negative sampling. Muhammed: TF-IDF cosine PoC and production module. |
+| 4 Jul | Complete | Ömer: model training upgraded to grouped folds. Ahmet: demographic signals. Mustafa: complete-positive exclusion and leakage assertions. Muhammed: TF-IDF integrated into the fixed feature contract. |
+| 5 Jul | Local complete; upload external | Ömer: locally QA-approved submission workflow; Kaggle upload needs account access. Ahmet: `sprint1_raporu.md`. Mustafa: seeded sampling. Muhammed: atomic submission QA gate. |
+| 6 Jul | Complete | Ömer: error-analysis module. Ahmet: L1/L2/L3 category features. Mustafa: compact two-pass BM25 index. Muhammed: TF-IDF parameter tooling and persisted vectorizer. |
+| 7 Jul | Complete | Ömer: BM25 candidate-shift comparison. Ahmet: attribute signal notes. Mustafa: BM25 hard-negative source with full exclusion. Muhammed: disk-backed full-submission feature strategy. |
+| 8 Jul | Complete at v1/PoC scope | Ömer: tuned tree configurations. Ahmet: `attribute_dogrulama_notlari.md`. Mustafa: flat catalog attribute parser and tests. Muhammed: strict offline embedding batch/checkpoint implementation; no synthetic fallback. |
+| 9 Jul | Complete | Ömer: LightGBM/XGBoost comparison. Ahmet: color/material/model conflict features. Mustafa: deterministic BM25/category/random mix. Muhammed: canonical item-text builder. |
+| 10 Jul | Complete; embedding promotion conditional | Ömer: full five-fold `feature_importance.md`. Ahmet: technical/method drafts. Mustafa: sampling-distribution study supersedes fixed-ratio datasets. Muhammed: production batch embedding runner and manifests; full matrix is not promoted without a local checkpoint. |
+| 11 Jul | Complete | Ömer: test-shaped candidate contract supersedes the legacy ratio matrix. Ahmet: threshold diagnostics. Mustafa: parameterized manifest-backed data builder. Muhammed: term embedding runner/checkpoint contract. |
+| 12 Jul | Complete; embedding promotion rejected pending evidence | Ömer: embedding comparison path refuses synthetic evidence. Ahmet: full fold-external `error_taxonomy.md`. Mustafa: frozen-data/pipeline QA. Muhammed: strict cosine feature and coverage validation. |
+| 13 Jul | Complete | Ömer: full LGBM/XGBoost/blend candidate table. Ahmet: current `rapor_yontem_v1.md`. Mustafa: full bounded-memory feature/inference path. Muhammed: `offline_dependency.md` and environment verifier. |
+| 14 Jul | Complete | Ömer: hash-verified full OOF shortlist. Ahmet: leakage-free `threshold_analysis.md`. Mustafa: measured full runtime/RSS with out-of-core inference. Muhammed: canonical one-command `RUNBOOK.md`. |
+| 15 Jul | Local complete; leaderboard external | Ömer: joint ensemble/threshold decision. Ahmet: local/leaderboard risk report without fabricated public score. Mustafa: five-file SHA-256 data freeze. Muhammed: exact requirements, clean-revision artifact lineage, and delivery manifest. |
 
-## Remaining Runtime Or External Actions
+## Accepted 15 July Decision
 
-1. Execute the full default production run and archive `oof_manifest.json`, `ensemble_decision.json`, runtime/RSS, and `submission_v2.csv` QA result.
-2. Upload approved candidates to Kaggle and record public scores. This requires team account access and cannot be inferred locally.
-3. Generate full sentence embeddings only if a local model checkpoint and suitable compute are available; promote them only after a positive grouped full-data ablation.
+| Field | Accepted value |
+|---|---|
+| Training terms / candidates | 17,968 / 1,877,700 |
+| Candidate sources | 250,000 positive; 316,893 BM25; 814,401 category; 496,406 random |
+| Validation | 5-fold `StratifiedGroupKFold`, grouped by `term_id` |
+| Models | 5 LightGBM + 5 XGBoost |
+| Selected candidate | 65% LightGBM + 35% XGBoost |
+| Cross-fitted Macro-F1 | 0.837508 |
+| Deploy threshold | 0.3718157097697258 |
+| Final local CSV | 3,359,679 rows; 645,783 positives; full QA passed |
 
-All historical scores produced by row-level CV, partial positive sampling, fixed negative ratios unlike test, synthetic embeddings, or same-OOF threshold reporting remain invalid for model selection.
+## Remaining External Action
+
+Upload the hash-approved `outputs/submission_v2.csv` through the authorized team
+account and record the observed public score. No local script or document can
+truthfully complete that account-bound action.

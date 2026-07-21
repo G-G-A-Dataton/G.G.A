@@ -1,6 +1,10 @@
 # Solution Method v1
 
-**Contract date:** 13 July 2026
+> This historical method snapshot is superseded by
+> [`final_solution_report_v2.md`](final_solution_report_v2.md) for the complete
+> 16 July solution, candidate strategy, QA, and reproducibility evidence.
+
+**Contract date:** 15 July 2026
 **Scope:** final candidate generation, features, validation, model selection, and inference
 
 ## 1. Problem And Data
@@ -17,12 +21,15 @@ For each complete training term:
 
 1. Keep every known positive.
 2. Set the target candidate count to `max(100, ceil(2 * positives))`.
-3. Fill half of the negative quota from catalog products sharing the positive products' normalized L2 category.
-4. Fill the remainder from deterministic catalog-random candidates.
-5. Exclude every known positive pair, including positives outside an experiment sample.
-6. Assert exact per-term quotas, uniqueness, and reproducibility.
+3. Fill 20% of the negative quota from the compact BM25 index.
+4. Fill 50% from catalog products sharing the positive products' normalized L2 category.
+5. Fill the remainder from deterministic catalog-random candidates.
+6. Exclude every known positive pair, including positives outside an experiment sample.
+7. Assert exact per-term quotas, source counts, uniqueness, and reproducibility.
 
-BM25 remains an ablation source. Its compact two-pass index is suitable for hard-negative experiments, but BM25 is not promoted merely because it is semantically closer; promotion requires a grouped comparison.
+The 20% BM25 share was selected by an unlabeled candidate-distribution shift
+study and then accepted only after grouped OOF validation. It is not justified
+by semantic intuition alone.
 
 ## 3. Feature Contract
 
@@ -69,8 +76,15 @@ The selected test probabilities are streamed into `outputs/submission_v2.csv`. P
 
 The canonical commands are documented in `RUNBOOK.md`; pinned packages and local-only optional embedding dependencies are documented in `docs/offline_dependency.md`.
 
-## 7. Current Evidence Boundary
+## 7. Accepted Evidence Boundary
 
-The 300-term acceptance run produced 33,048 training candidates, ten model folds, and 50,000 QA-verified test predictions in 2 minutes 8 seconds at approximately 1.46 GB peak RSS. Cross-fitted Macro-F1 was 0.939451 for LightGBM, 0.937968 for XGBoost, and 0.937536 for the blend; LightGBM was correctly selected at deploy threshold 0.41054133.
+The full run trained on 1,877,700 candidates and generated all 3,359,679 test
+predictions. Cross-fitted Macro-F1 was 0.837304 for LightGBM, 0.836820 for
+XGBoost, and 0.837508 for the weighted blend. The selected deploy rule uses
+65% LightGBM, 35% XGBoost, and threshold 0.37181571.
 
-This run validates behavior and scale, not leaderboard quality. Full 1,877,700-row training, full 3,359,679-row prediction, optional full embedding ablation, and Kaggle scores must be recorded separately when those runtime jobs complete.
+This is valid grouped local evidence, not a leaderboard projection. The final
+CSV and its decision/OOF lineage are hash-bound by the delivery manifest. A
+Kaggle score remains external evidence. Full sentence embeddings remain a
+conditional experiment and cannot enter the feature contract without a real
+local checkpoint, complete manifests, and a positive grouped ablation.

@@ -4,6 +4,25 @@
 
 > T3 Vakfı, Sanayi ve Teknoloji Bakanlığı ve **Trendyol** iş birliğiyle düzenlenmektedir.
 
+## 15 Temmuz Üretim Durumu
+
+Tam üretim akışı 17.968 sorgu ve 1.877.700 eğitim adayı üzerinde çalıştırıldı.
+Beş LightGBM ve beş XGBoost modelinden seçilen `%65/%35` blend, sorgu bazlı
+cross-fitted Macro-F1 `0.837508` elde etti. `outputs/submission_v2.csv` tam
+3.359.679 satır için format, binary değer, benzersiz/tam ID sırası ve hash
+zinciri kontrollerini geçti. Ayrıntılı kanıt:
+[`docs/july_15_delivery.md`](docs/july_15_delivery.md).
+
+16 Temmuz temiz ortam dry-run'ı, 158 hash-kilitli paketle `102/102` testi geçti
+ve tam submission dosyasını kabul edilen SHA-256 ile byte düzeyinde aynı üretti:
+[`docs/reproducibility_dry_run.md`](docs/reproducibility_dry_run.md).
+
+Aynı gün ekip görevleri `4/4` tamamlandı: blend birincil aday ve LightGBM yedek
+aday tam boyutta üretildi, ikisi de QA onayı aldı ve final rapor v2 güncellendi.
+Kanıt: [`docs/july_16_task_audit.md`](docs/july_16_task_audit.md).
+
+Bu değer yerel validasyon sonucudur, Kaggle leaderboard skoru değildir.
+
 ---
 
 ## 📌 Problem Tanımı
@@ -46,7 +65,7 @@ G.G.A/
 │   ├── data.py                  # Bellek dostu veri yükleme
 │   ├── features.py              # 23 lexical/demographic/category/attribute features
 │   ├── context_features.py      # 9 candidate-relative rank/gap features
-│   ├── candidate_sampling.py    # Test-shaped, leakage-free candidate generation
+│   ├── candidate_sampling.py    # BM25/category/random test-shaped candidates
 │   ├── modeling.py              # Shared grouped OOF/threshold/ensemble contracts
 │   ├── oof_artifacts.py         # Hash-verified shortlist artifact contract
 │   ├── out_of_core_features.py  # Global context features with bounded RAM
@@ -80,21 +99,23 @@ G.G.A/
 │   │   └── run_embedding_score_comparison.py # Embedding cosine feature etkisi
 │   ├── submission/              # Submission
 │   │   ├── run_full_submission_v2.py    # Tam submission dosyası üretimi
+│   │   ├── run_final_candidate_set.py    # En iyi iki aday + manifest + QA
 │   │   └── run_submission_qa.py         # Submission QA kontrolü
 │   └── data/                    # Veri hazırlama & kalite
 │       ├── run_hard_neg_comparison.py   # Hard vs random negative karşılaştırma
 │       ├── run_tfidf_experiments.py     # TF-IDF parametre deneyleri
 │       └── verify_pipeline.py           # Pipeline doğrulama
 ├── docs/                        # Dokümantasyon & raporlar
-│   ├── experiment_log.md            # Tüm deney geçmişi (EXP-001 → EXP-009)
+│   ├── experiment_log.md            # Tarihsel deneyler + kabul edilen full run
 │   ├── feature_importance_raporu.md # Feature önem analizi (10 Temmuz)
 │   ├── threshold_analysis.md        # Current threshold diagnostics (generated)
-│   ├── experiment_matrix_v2.md      # Current grouped ablation (generated)
+│   ├── candidate_shift_analysis.md  # BM25 oranı dağılım analizi
 │   ├── ensemble_selection.md        # Final shortlist decision (generated)
-│   ├── error_taxonomy.md            # Current error taxonomy (generated)
+│   ├── feature_importance.md        # Current full-run importance (generated)
+│   ├── error_taxonomy.md            # Current full-run taxonomy (generated)
 │   ├── embedding_skor_kiyasi.md     # Embedding cosine etkisi (12 Temmuz)
 │   ├── teknik_rapor_v1.md           # EDA & feature bulguları (10 Temmuz)
-│   ├── rapor_yontem_v1.md           # Yöntem bölümü (13 Temmuz)
+│   ├── rapor_yontem_v1.md           # Kabul edilen yöntem (15 Temmuz)
 │   ├── offline_dependency.md        # Offline hazırlık rehberi (13 Temmuz)
 │   ├── sprint1_raporu.md            # Sprint 1 özeti
 │   ├── sprint2_raporu.md            # Sprint 2 özeti
@@ -103,7 +124,8 @@ G.G.A/
 │   ├── embeddings/              # term_embeddings.npy, item_embeddings.npy
 │   └── *.csv                    # Deney sonuç tabloları
 ├── notebooks/                   # Jupyter Notebooklar
-├── requirements.txt
+├── requirements.txt              # Doğrudan bağımlılık pinleri
+├── requirements.lock             # Hash'li tam transitif ortam kilidi
 └── README.md
 ```
 
@@ -206,13 +228,14 @@ source venv/bin/activate        # Linux / macOS
 
 ```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
 ```
 
 ### Adım 4: Kurulumu Doğrula
 
 ```bash
-python scripts/verify_environment.py
+PYTHONNOUSERSITE=1 python scripts/verify_environment.py \
+  --lock requirements.lock
 ```
 
 ### 📦 Temel Bağımlılıklar
@@ -231,7 +254,10 @@ python scripts/verify_environment.py
 | `matplotlib` | 3.11.0 | Görselleştirme |
 | `seaborn` | 0.13.2 | İstatistiksel görselleştirme |
 
-> Tüm bağımlılıkların tam listesi için [requirements.txt](requirements.txt) dosyasına bakınız.
+> Doğrudan bağımlılıklar [requirements.txt](requirements.txt), kurulabilir tam
+> ortam ise [requirements.lock](requirements.lock) dosyasında tutulur. Offline
+> wheelhouse ve temiz ortam doğrulaması için
+> [offline dependency rehberini](docs/offline_dependency.md) kullanın.
 
 ---
 

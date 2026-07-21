@@ -2,8 +2,8 @@
 
 > [!CAUTION]
 > **Historical, invalidated threshold.** `0.35` came from legacy row-level OOF
-> predictions. Production loads the threshold created by the next full grouped
-> training run; no fixed threshold is currently approved.
+> predictions. Production uses the accepted full grouped threshold recorded in
+> `docs/threshold_analysis.md`; the historical value below is not approved.
 > Current runner: `python scripts/analysis/run_threshold_analysis.py`; new
 > results are written to `docs/threshold_analysis.md`.
 
@@ -67,7 +67,6 @@ Bu yüzden optimal threshold 0.5'ten **düşük** çıkar.
 ## 4. Sonraki Adımlar
 
 - **Geçersiz eski öneri:** `0.35` üretimde kullanılmamalıdır.
-- Tam eğitim seti (250K pozitif) üzerinde bu analizi tekrarla (skoru değişebilir)
-- BM25 hard negative ile eğitim yapılırsa optimal threshold farklılaşabilir — yeniden hesapla
+- Tam eğitim ve BM25 dahil güncel sonuç için `docs/threshold_analysis.md` kullanılır.
 
 *Ham CSV: `outputs/threshold_analizi.csv`*

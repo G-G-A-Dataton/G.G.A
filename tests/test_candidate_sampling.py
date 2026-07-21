@@ -18,6 +18,8 @@ def make_catalog(count=240):
                 "electronics/phone" if index < count // 2 else "home/kitchen"
                 for index in range(count)
             ],
+            "title": [f"product {index}" for index in range(count)],
+            "brand": ["brand"] * count,
         }
     )
 
@@ -79,6 +81,45 @@ class CandidateSamplingTests(unittest.TestCase):
                 self.positives,
                 self.items,
                 positive_reference_df=self.positives.iloc[:-1],
+                verbose=False,
+            )
+
+    def test_bm25_quota_precedes_category_and_random_fill(self):
+        class FakeIndex:
+            def top_n(self, query, n):
+                return self.items[:n]
+
+        index = FakeIndex()
+        index.items = self.items["item_id"].to_numpy()[::-1]
+        terms = pd.DataFrame(
+            {"term_id": ["t1", "t2"], "query": ["phone", "kitchen"]}
+        )
+        result = build_test_shaped_training_set(
+            self.positives,
+            self.items,
+            terms_df=terms,
+            bm25_hard_fraction=0.25,
+            category_hard_fraction=0.25,
+            bm25_index=index,
+            random_state=9,
+            verbose=False,
+        )
+
+        negatives = result[result["label"] == 0]
+        expected_bm25 = sum(
+            round(count * 0.25) for count in {"t1": 96, "t2": 60}.values()
+        )
+        self.assertEqual((negatives["neg_source"] == "bm25").sum(), expected_bm25)
+        self.assertFalse(result.duplicated(["term_id", "item_id"]).any())
+        self.assertEqual(result.groupby("term_id").size().to_dict(), {"t1": 100, "t2": 120})
+
+    def test_hard_negative_fractions_cannot_exceed_quota(self):
+        with self.assertRaisesRegex(ValueError, "sum to at most 1"):
+            build_test_shaped_training_set(
+                self.positives,
+                self.items,
+                bm25_hard_fraction=0.6,
+                category_hard_fraction=0.5,
                 verbose=False,
             )
 

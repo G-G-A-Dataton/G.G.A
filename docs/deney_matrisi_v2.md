@@ -2,10 +2,9 @@
 
 > [!CAUTION]
 > **Historical, invalidated matrix.** These scores used row-level CV and the old
-> sampling/attribute contracts. Rerun the matrix with grouped validation before
-> selecting a ratio or feature set.
-> Current runner: `python scripts/analysis/run_deney_matrisi_v2.py`; new results
-> are written to `docs/experiment_matrix_v2.md`.
+> sampling/attribute contracts. Fixed global negative ratios were superseded by
+> the test-shaped candidate quota and BM25 distribution study in
+> `candidate_shift_analysis.md`; do not select a production ratio from this table.
 
 **Hazırlayan:** Ömer Faruk Kara  
 **Tarih:** 11 Temmuz 2026  

@@ -41,6 +41,27 @@ def _validate_frame(df, expected_columns, id_column, source):
     return df
 
 
+def _ensure_real_csv(file_path):
+    """CSV dosyasının gerçek veri dosyası olduğunu doğrular.
+
+    Bazı repo'larda büyük dosyalar Git LFS pointer dosyası olarak saklanır.
+    Bu durumda pandas okumaya çalışsa da hatalı sonuç verir. Bu fonksiyon,
+    böyle bir durum tespit edilirse kullanıcıya net bir rehber verir.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Veri dosyası bulunamadı: {file_path}")
+
+    with open(file_path, "r", encoding="utf-8") as handle:
+        first_line = handle.readline().strip()
+
+    if first_line.startswith("version https://git-lfs.github.com/spec/v1"):
+        raise RuntimeError(
+            f"{file_path} gerçek CSV değil; Git LFS pointer dosyası olarak saklanmış. "
+            "Lütfen `git lfs install` ve `git lfs pull` çalıştırın veya veri dosyalarını "
+            "gerçek CSV formatında repo'ya çekin."
+        )
+
+
 def load_terms(file_path):
     """
     Sorgu terimlerini (terms.csv) belleği optimize ederek yükler.
@@ -51,10 +72,8 @@ def load_terms(file_path):
     Döndürür:
         pd.DataFrame: Yüklenen veri seti.
     """
-    # Dosyanın var olup olmadığını kontrol et, yoksa hata fırlat
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Sorgu dosyası bulunamadı: {file_path}")
-        
+    _ensure_real_csv(file_path)
+    
     # Veri tiplerini baştan belirliyoruz.
     # Normalde pandas metinleri 'object' olarak yükler ve bu çok bellek harcar.
     # 'string' veri tipi pandas'ın yeni ve daha optimize metin veri tipidir.
@@ -80,9 +99,8 @@ def load_items(file_path):
     Parametreler:
         file_path (str): items.csv dosyasının bulunduğu yol.
     """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Ürün dosyası bulunamadı: {file_path}")
-        
+    _ensure_real_csv(file_path)
+    
     # 'category' tipi: Eğer bir sütunda çok fazla tekrar eden değer varsa 
     # (örneğin cinsiyet: sadece kadın, erkek, unisex, unknown) bunları metin olarak
     # saklamak yerine arkada sayısal kodlarla tutar ve RAM kullanımını çok düşürür.
@@ -119,9 +137,8 @@ def merge_pairs(pairs_path, terms_df, items_df, is_train=True):
         items_df (DataFrame): load_items() ile yüklenmiş ürünler.
         is_train (bool): Eğer bu eğitim verisi ise 'label' kolonu içerir.
     """
-    if not os.path.exists(pairs_path):
-        raise FileNotFoundError(f"Eşleşme dosyası bulunamadı: {pairs_path}")
-        
+    _ensure_real_csv(pairs_path)
+    
     # Önce baz ID'leri string olarak tanımlıyoruz
     dtypes = {
         'id': 'string',

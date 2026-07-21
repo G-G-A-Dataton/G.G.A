@@ -1,4 +1,4 @@
-"""One-command verified training and inference runner."""
+"""One-command verified training, benchmark, ablation and inference runner."""
 
 import argparse
 import os
@@ -17,7 +17,10 @@ def run(command):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Run verified production workflow")
     parser.add_argument(
-        "--stage", choices=["verify", "train", "predict", "all"], default="all"
+        "--stage",
+        choices=["verify", "train", "predict", "benchmark", "ablation", "full-e2e", "all"],
+        default="all",
+        help="Pipeline stage to execute",
     )
     parser.add_argument(
         "--pipeline",
@@ -30,14 +33,27 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     python = sys.executable
+
     if args.stage in ("verify", "all"):
-        run([python, "-m", "unittest", "discover", "-s", "tests", "-v"])
+        run([python, "-m", "pytest", "tests/", "-v"])
         verify_cmd = [python, "scripts/verify_environment.py"]
         if args.ignore_env_mismatch:
             verify_cmd.append("--ignore-mismatch")
+        else:
+            lock_path = os.path.join(PROJECT_ROOT, "requirements.lock")
+            if os.path.exists(lock_path):
+                verify_cmd.extend(["--lock", "requirements.lock"])
         run(verify_cmd)
         run([python, "scripts/data/verify_data_freeze.py"])
         run([python, "scripts/data/verify_pipeline.py"])
+        run([python, "scripts/data/run_data_quality_report.py"])
+
+    if args.stage in ("benchmark", "full-e2e"):
+        run([python, "scripts/training/run_hybrid_reranker_benchmark.py"])
+
+    if args.stage in ("ablation", "full-e2e"):
+        run([python, "scripts/analysis/run_ablation_matrix.py"])
+
     if args.stage in ("train", "all"):
         training_script = (
             "scripts/training/run_model_shortlist.py"
@@ -45,6 +61,7 @@ def main(argv=None):
             else "scripts/training/run_train_full_v2.py"
         )
         run([python, training_script])
+
     if args.stage in ("predict", "all"):
         if args.pipeline == "shortlist":
             run(
@@ -58,7 +75,7 @@ def main(argv=None):
                 ]
             )
         else:
-            run([python, "scripts/submission/run_pipeline.py", "--mode", "predict"])
+            run([python, "pipeline/inference.py", "--mode", "predict"])
 
 
 if __name__ == "__main__":

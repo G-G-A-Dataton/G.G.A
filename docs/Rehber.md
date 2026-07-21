@@ -67,13 +67,14 @@ Kaggle'a girin → Competition sayfası → "Code" sekmesi → "New Notebook"
 
 ### Yerel kurulum (opsiyonel)
 
-Eğer kendi bilgisayarınızda da çalışmak istiyorsanız:
+Kendi bilgisayarınızda kabul edilen ortamı kurmak için:
 
 ```bash
-# Python 3.9+ gerekiyor
-pip install pandas numpy scikit-learn lightgbm xgboost
-pip install sentence-transformers rank_bm25
-pip install matplotlib seaborn
+python3.13 -m venv venv
+source venv/bin/activate
+python -m pip install --require-hashes -r requirements.lock
+PYTHONNOUSERSITE=1 python scripts/verify_environment.py \
+  --lock requirements.lock
 ```
 
 ### İlk notebook yapısı
@@ -91,7 +92,8 @@ proje/
 ├── src/
 │   ├── features.py           # Feature fonksiyonları
 │   └── utils.py              # Ortak araçlar
-└── requirements.txt
+├── requirements.txt          # Doğrudan bağımlılık pinleri
+└── requirements.lock         # Hash'li tam transitif ortam kilidi
 ```
 
 ### Veriyi yükleme (Kaggle'da)

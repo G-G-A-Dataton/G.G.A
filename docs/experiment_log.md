@@ -1,151 +1,89 @@
-# G.G.A — Deney Kayıt Tablosu (experiment_log.md)
+# G.G.A Experiment Register
 
-> [!CAUTION]
-> **EXP-001 through EXP-009 are legacy, non-comparable runs.** They used the
-> former row-level CV and/or sampled-positive negative exclusion, and attribute
-> features were inactive against the real flat catalog format. Retain the rows
-> only as history; do not use their scores or thresholds for decisions. The
-> next valid run must follow [`model_status.md`](model_status.md).
+This register separates decision-grade experiments from historical development
+runs. Scores are comparable only when they use the accepted test-shaped
+candidate distribution, complete-positive exclusion, grouped validation, and
+cross-fitted parameter selection.
 
-Tüm model deneyleri bu dosyada kayıt altına alınır.  
-Her submission veya önemli local validation sonucu buraya eklenir.
+## Decision-Grade Evidence
 
-**Format:** Her deney aşağıdaki bilgileri içermelidir:
-- Deney ID (EXP-xxx)
-- Tarih ve sahibi
-- Kullanılan veri seti ve negatif strateji
-- Feature listesi
-- CV skoru (Macro-F1 ± std)
-- Kaggle Public LB skoru (varsa)
-- Notlar / sonraki adım
+| ID | Date | Scope | Validation | Result | Decision |
+|---|---|---|---|---|---|
+| EXP-010 | 15 Jul | Full LightGBM/XGBoost shortlist | 5-fold grouped, cross-fitted | Blend 0.837508; LGB 0.837304; XGB 0.836820 | Accept 0.65/0.35 blend at threshold 0.37181571 |
+| ACC-011 | 16 Jul | Clean-environment delivery reproduction | 102 tests plus data/artifact/delivery gates | Final CSV reproduced byte for byte | Reproducibility accepted |
+| REL-012 | 16 Jul | Top-two final candidate packaging | Full OOF ranking and exact QA | 2/2 candidates passed; 21,647-row disagreement | Blend primary; LightGBM fallback |
 
----
+Kaggle public/private scores are deliberately blank because the repository has
+no authorized account observation.
 
-## Deney Tablosu
+## EXP-010: Accepted Full Production Run
 
-| Deney | Tarih | Sahibi | Model | Neg. Strateji | Feature | CV F1 | LB F1 | Notlar |
-|---|---|---|---|---|---|---|---|---|
-| EXP-001 | 3 Tem | Ömer Faruk | LightGBM | Random 3:1 / 5K poz | 7 temel | 0.9613 ± 0.0013 | — | Baseline v0, threshold opt. → 0.9621 |
-| EXP-002 | 4 Tem | Ömer Faruk | LightGBM | Random 3:1 / 5K poz | 9 (7 + demografik) | TBD | — | age_group_match + demographic_conflict |
-| EXP-003 | 4 Tem | Muhammed | LightGBM | Random 3:1 / 5K poz | 10 (9 + TF-IDF) | **0.9699 ± 0.0028** | — | TF-IDF #1 importance, +0.0086 kazanım |
-| EXP-004 | 6 Tem | Ahmet Emin | LightGBM | Random 3:1 / 3K poz | 12 (10 + L2/L3/depth) | TBD | — | Kategori seviye feature'ları eklendi |
-| EXP-005 | 7 Tem | Ömer Faruk | LightGBM | Random 3:1 / 3K poz | 12 temel | **0.9622 ± 0.0022** | — | Hard neg. baseline (BM25 bekleniyor), thresh=0.4 → 0.9625 |
-| EXP-006 | 8 Tem | Ömer Faruk | LightGBM | BM25 Hard 3:1 / 5K sorgu | 15 (12+TF-IDF+attrübüt) | ⏳ Çalıştırılacak | — | `notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` ile üret |
-| EXP-007 | 9 Tem | Ömer Faruk | LightGBM | Mix(BM25+Rand) 3:1 / 250K poz | 16 (15+tfidf) | ⏳ Çalıştırılacak | — | `run_train_full_v2.py` → tam model, submission hazır |
-| EXP-008 | 8 Tem | Ömer Faruk | LightGBM | Random 3:1 / 2K poz | 15 (12+attributes) | **0.9615 ± 0.0039** | — | Grid search: num_leaves=31, lr=0.05, min_child=20 → F1: 0.9631 |
-| EXP-009 | 9 Tem | Ömer Faruk | LGBM vs XGB | Random 3:1 / 3K poz | 15 (12+attributes) | **LGBM: 0.9605 / XGB: 0.9597** | — | LGBM is faster and slightly higher F1 (0.9613 vs 0.9597) |
-
-
----
-
-## Deney Detayları
-
-### EXP-001 — Baseline v0 (3 Temmuz)
-
-**Amaç:** Sistemin uçtan uca çalıştığını doğrulamak, ilk kaba F1 skorunu almak.
-
-| Parametre | Değer |
+| Field | Accepted value |
 |---|---|
-| Model | LightGBM |
-| `num_leaves` | 31 |
-| `learning_rate` | 0.05 |
-| `min_child_samples` | 20 |
-| `subsample` | 0.8 |
-| `colsample_bytree` | 0.8 |
-| `num_boost_round` | 500 (early stopping 30) |
-| Negatif strateji | Random, ratio=3:1 |
-| Eğitim seti | 5.000 pozitif + 15.000 negatif = 20.000 |
-| Validation | Legacy 5-Fold row-level Stratified CV, seed=42 (invalidated) |
+| Artifact revision | `f22e1e66a1e06879d29905637ecbfe6c0cfc6604` |
+| Complete terms | 17,968 |
+| Positive / negative candidates | 250,000 / 1,627,700 |
+| Candidate sources | 316,893 BM25; 814,401 category; 496,406 random |
+| Validation | 5-fold `StratifiedGroupKFold`, group=`term_id` |
+| Models | 5 LightGBM + 5 XGBoost |
+| Features | 33 ordered production features |
+| Cross-fitted scores | blend 0.837508; LGB 0.837304; XGB 0.836820 |
+| Deploy rule | LGB 0.65; XGB 0.35; threshold 0.3718157097697258 |
+| Submission | 3,359,679 rows; 645,783 positives; exact QA passed |
+| Runtime | training 48:28.11; selection/inference 1:11.70 |
 
-**Fold Sonuçları:**
+## REL-012: Final Candidate Set
 
-| Fold | Macro-F1 | Best Iter |
+| Rank | Candidate | Cross-fitted Macro-F1 | Threshold | Positives | SHA-256 |
+|---:|---|---:|---:|---:|---|
+| 1 | LGB/XGB 0.65/0.35 blend | 0.837508 | 0.37181571 | 645,783 | `2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c` |
+| 2 | LightGBM | 0.837304 | 0.38338208 | 634,316 | `c9407c965ad7ba047441aa44952dab4681a13e23d32fb494b1c31545c83052e7` |
+
+The candidates disagree on 21,647 rows (`0.6443%`). The runner-up is retained
+for model-family diversity; the local evidence still selects Candidate 1.
+
+## Supporting Decision Records
+
+| Record | Evidence | Outcome |
 |---|---|---|
-| 1 | 0.9636 | 118 |
-| 2 | 0.9615 | 124 |
-| 3 | 0.9600 | 126 |
-| 4 | 0.9603 | 118 |
-| 5 | 0.9612 | 121 |
-| **Ort.** | **0.9613 ± 0.0013** | — |
+| Candidate-distribution study | 1,000 training and 1,000 submission terms; unlabeled normalized-quantile distance | 20% BM25 fraction selected, then validated grouped |
+| Threshold study | Fold-specific selection outside each evaluated fold | Deploy threshold 0.37181571 fitted on all OOF only after validation |
+| Large-group override | Cross-fitted Macro-F1 0.835422 versus 0.837508 baseline | Rejected |
+| Sentence embeddings | Production-safe code exists; no complete local checkpoint/manifests and positive grouped ablation | Not promoted |
+| Error taxonomy | 68,740 FP and 71,467 FN from fold-external predictions | Lexical decoys and no-lexical-evidence cases prioritized |
 
-**Threshold Optimizasyonu:**
-- Varsayılan (t=0.50): 0.9613
-- En iyi (t=0.45): **0.9621**
+## Historical Development Runs
 
-**Feature Importance (gain):**
-```
-query_title_overlap       ██████████████████████████████ (89,620)
-query_category_overlap    ██████████ (31,299)
-query_brand_match         ████████ (24,145)
-query_len                 █ (5,911)
-title_len                  (2,582)
-gender_match               (1,961)
-query_cat_l1_overlap       (1,608)
-```
+EXP-001 through EXP-009 are retained as engineering history only. At least one
+accepted contract was absent: query-group isolation, complete-positive
+exclusion, flat-catalog attribute parsing, test-shaped negative quotas, or
+cross-fitted thresholds. Their values must not be compared with EXP-010.
 
-**Çıkarımlar:**
-- `query_title_overlap` dominant (toplam gain'in %58'i)
-- Demografik feature'lar (gender_match) çok az katkı → %60 unknown nedeniyle beklenen
-- Threshold 0.5 yerine 0.45 daha iyi → model biraz konservatif tahmin ediyor
+| ID | Historical scope | Recorded value | Status / limitation |
+|---|---|---|---|
+| EXP-001 | LightGBM random-negative baseline | 0.9613 row-level CV | Invalidated: row-level split and obsolete candidate distribution |
+| EXP-002 | Demographic additions | no isolated accepted score | Closed without a decision-grade result |
+| EXP-003 | TF-IDF development run | 0.9699 row-level CV | Invalidated validation; TF-IDF retained through EXP-010 evidence |
+| EXP-004 | Category hierarchy additions | no isolated accepted score | Closed without a decision-grade result |
+| EXP-005 | Early hard-negative baseline | 0.9622 row-level CV | Invalidated validation and negative contract |
+| EXP-006 | Planned BM25 comparison | no accepted full result under that ID | Superseded by distribution study and EXP-010 |
+| EXP-007 | Planned mixed full run | no accepted result under that ID | Superseded by EXP-010 |
+| EXP-008 | Early tuning grid | 0.9631 row-level diagnostic | Invalidated validation and feature contract |
+| EXP-009 | Early LGB/XGB comparison | LGB 0.9613; XGB 0.9597 | Invalidated validation; model families re-evaluated in EXP-010 |
 
-**Sonraki adım:** TF-IDF ekleyip EXP-002/003 çalıştır.
+## Registration Rules
 
----
+Every new decision-grade row must record:
 
-### EXP-002 — Demografik Feature Seti (4 Temmuz)
+- immutable experiment ID, date, owner, and clean Git revision;
+- data/candidate/feature schema versions and hashes;
+- group-aware validation and leakage controls;
+- cross-fitted score plus separately labeled deploy parameters;
+- artifact paths and SHA-256;
+- measured runtime/resources and an explicit accept/reject decision;
+- leaderboard value only when directly observed through the authorized account.
 
-> ⚠️ Code commit’de var (`src/features.py` satır 388-397), manuel CV sonucu
-> kaydedilmemis. EXP-003 ile birlikte çalıştırılmıştı; TF-IDF (EXP-003) bastığı icin
-> ayrı skor algılanmadı. Sonraki tam modelde feature importance'a bakılacak.
-
-**Değişiklik:** `src/features.py`'ye `age_group_match` ve `demographic_conflict` eklendi.
-
-| Parametre | EXP-001 | EXP-002 |
-|---|---|---|
-| Feature sayısı | 7 | 9 |
-| Yeni feature'lar | — | `age_group_match`, `demographic_conflict` |
-
-**Beklenti:** Küçük iyileşme (< +0.005). age_group %59 unknown olduğu için sınırlı etki.
-
----
-
-### EXP-003 — TF-IDF Cosine Feature (4 Temmuz)
-
-> ⚠️ Code commit'de sonucu kayitli (experiment_log satiri: 0.9699 ± 0.0028)
-> EXP-002 ile birlikte ayni run'da mi yoksa ayri mi calistirildi netlestirilmeli.
-
-**Değişiklik:** `src/tfidf_features.py` baseline pipeline'a bağlandi.
-
-| Parametre | EXP-001 | EXP-003 |
-|---|---|---|
-| Feature sayısı | 7 | 10 |
-| Yeni feature'lar | — | `tfidf_cosine` |
-| TF-IDF vocab | — | 30K, ngram=(1,2) |
-
-**Beklenti:** Orta düzey iyileşme (+0.005 — +0.02). TF-IDF PoC'ta pozitif/negatif cosine farkı 0.37 idi — güçlü sinyal.
-
----
-
-## Notlar
-
-- Tüm deneyler `seed=42` ile tekrar üretilebilir
-- Local CV skoru Kaggle LB ile uyuşmayabilir — LB skoru her zaman not alınmalı
-- **EXP-001 best threshold: 0.45** — submission'larda bu kullanılacak
-- **EXP-003 best TF-IDF konfig: `ngram=(1,1), max_features=10_000`** — `run_baseline_tfidf.py` 8 Temmuz'da güncellendi
-- **EXP-006** — `notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` çalıştırılınca tablo güncellenecek
-
----
-
-## EXP-006 Detayı (8 Temmuz)
-
-**Amaç:** BM25 hard negative'in random negative'den daha iyi mi olduğunu ölçmek.
-
-| Parametre | Değer |
-|---|---|
-| Script | `notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` |
-| BM25 top_n | 50 |
-| Negatif oran | 3:1 |
-| Örnek sorgu sayısı | 5.000 benzersiz sorgu |
-| Feature seti | 15 (12 temel + TF-IDF + attributes) |
-
-> **➡️ Sonucu** `python notebooks/06_bm25_karsilastirma_tam_omerfaruk.py` çalıştırınca `outputs/hard_neg_comparison.csv`'ye yazılır.
+The accepted integrity chain is detailed in
+[`july_15_delivery.md`](july_15_delivery.md). Current model status and the full
+v2 narrative are in [`model_status.md`](model_status.md) and
+[`final_solution_report_v2.md`](final_solution_report_v2.md).

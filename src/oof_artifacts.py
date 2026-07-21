@@ -26,6 +26,20 @@ EXPECTED_POSITIVE_ROWS = 250_000
 EXPECTED_TRAINING_ROWS = 1_877_700
 EXPECTED_TRAINING_TERMS = 17_968
 EXPECTED_TEST_ROWS = 3_359_679
+PRODUCTION_NUM_BOOST_ROUND = 3_000
+PRODUCTION_EARLY_STOPPING_ROUNDS = 200
+PRODUCTION_MODEL_THREADS = 8
+PRODUCTION_CANDIDATE_SAMPLING = {
+    "strategy": "test_shaped_bm25_category_random",
+    "min_candidates": 100,
+    "dense_multiplier": 2.0,
+    "bm25_hard_fraction": 0.20,
+    "category_hard_fraction": 0.5,
+    "bm25_top_n": 200,
+    "bm25_max_df_ratio": 0.15,
+    "random_state": 42,
+    "positive_reference_rows": EXPECTED_POSITIVE_ROWS,
+}
 
 
 def sha256_file(path):
@@ -49,6 +63,7 @@ def write_oof_manifest(
     model_files,
     support_files,
     code_revision,
+    training_config,
     feature_columns=None,
 ):
     feature_columns = MODEL_FEATURE_COLS if feature_columns is None else feature_columns
@@ -58,7 +73,7 @@ def write_oof_manifest(
     if missing:
         raise FileNotFoundError(f"Cannot manifest missing OOF artifacts: {missing}")
     manifest = {
-        "artifact_schema_version": 2,
+        "artifact_schema_version": 3,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "context_feature_schema_version": CONTEXT_FEATURE_SCHEMA_VERSION,
         "candidate_sampling_schema_version": CANDIDATE_SAMPLING_SCHEMA_VERSION,
@@ -70,13 +85,14 @@ def write_oof_manifest(
             "random_state": 42,
             "selection": "cross_fitted",
         },
+        "model_training": training_config,
         "training_mode": training_mode,
         "test_mode": test_mode,
         "feature_columns": feature_columns,
         "training": training_stats,
         "test_rows": int(test_rows),
         "candidate_sampling": {
-            "strategy": "test_shaped_category_random",
+            "strategy": "test_shaped_bm25_category_random",
             **candidate_config,
             "positive_reference_rows": int(positive_reference_rows),
         },
@@ -117,7 +133,7 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
         raise FileNotFoundError(f"Missing OOF artifacts: {missing}")
 
     errors = []
-    if manifest.get("artifact_schema_version") != 2:
+    if manifest.get("artifact_schema_version") != 3:
         errors.append("unsupported artifact schema")
     if manifest.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
         errors.append("feature schema mismatch")
@@ -144,6 +160,16 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
     }
     if manifest.get("validation") != expected_validation:
         errors.append("OOF predictions are not cross-fitted by term_id")
+    model_training = manifest.get("model_training")
+    if not _valid_model_training(model_training):
+        errors.append("model training configuration contract mismatch")
+    if require_full and (
+        not isinstance(model_training, dict)
+        or model_training.get("num_boost_round") != PRODUCTION_NUM_BOOST_ROUND
+        or model_training.get("early_stopping_rounds")
+        != PRODUCTION_EARLY_STOPPING_ROUNDS
+    ):
+        errors.append("full artifacts require the production boosting budget")
     if prediction_files != OOF_FILENAMES:
         errors.append("OOF prediction file contract mismatch")
     if (
@@ -156,15 +182,7 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
         errors.append("TF-IDF support artifact contract mismatch")
 
     sampling = manifest.get("candidate_sampling", {})
-    expected_sampling = {
-        "strategy": "test_shaped_category_random",
-        "min_candidates": 100,
-        "dense_multiplier": 2.0,
-        "category_hard_fraction": 0.5,
-        "random_state": 42,
-        "positive_reference_rows": EXPECTED_POSITIVE_ROWS,
-    }
-    if sampling != expected_sampling:
+    if not _valid_candidate_sampling(sampling):
         errors.append("OOF candidate sampling contract mismatch")
     training = manifest.get("training", {})
     for field in ("terms", "rows", "positive_rows", "negative_rows"):
@@ -195,6 +213,8 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
             elif sha256_file(source_path) != expected_hash:
                 errors.append(f"source data SHA-256 mismatch: {filename}")
 
+    if require_full and sampling != PRODUCTION_CANDIDATE_SAMPLING:
+        errors.append("full artifacts require the production candidate sampling config")
     if require_full and (
         manifest.get("training_mode") != "full"
         or manifest.get("test_mode") != "full"
@@ -215,6 +235,114 @@ def validate_oof_artifacts(output_dir, require_full=False, source_data_dir=None)
     if errors:
         raise ValueError("Invalid OOF artifact manifest: " + "; ".join(errors))
     return manifest
+
+
+def _valid_candidate_sampling(sampling):
+    if not isinstance(sampling, dict) or set(sampling) != set(
+        PRODUCTION_CANDIDATE_SAMPLING
+    ):
+        return False
+    fractions = (
+        sampling.get("bm25_hard_fraction"),
+        sampling.get("category_hard_fraction"),
+    )
+    return (
+        sampling.get("strategy") == "test_shaped_bm25_category_random"
+        and isinstance(sampling.get("min_candidates"), int)
+        and not isinstance(sampling.get("min_candidates"), bool)
+        and sampling["min_candidates"] > 0
+        and isinstance(sampling.get("dense_multiplier"), (int, float))
+        and not isinstance(sampling.get("dense_multiplier"), bool)
+        and np.isfinite(sampling["dense_multiplier"])
+        and sampling["dense_multiplier"] >= 1.0
+        and all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and np.isfinite(value)
+            and 0.0 <= value <= 1.0
+            for value in fractions
+        )
+        and sum(fractions) <= 1.0
+        and isinstance(sampling.get("bm25_top_n"), int)
+        and not isinstance(sampling.get("bm25_top_n"), bool)
+        and sampling["bm25_top_n"] > 0
+        and isinstance(sampling.get("bm25_max_df_ratio"), (int, float))
+        and not isinstance(sampling.get("bm25_max_df_ratio"), bool)
+        and np.isfinite(sampling["bm25_max_df_ratio"])
+        and 0.0 < sampling["bm25_max_df_ratio"] <= 1.0
+        and isinstance(sampling.get("random_state"), int)
+        and not isinstance(sampling.get("random_state"), bool)
+        and sampling.get("positive_reference_rows") == EXPECTED_POSITIVE_ROWS
+    )
+
+
+def _valid_model_training(config):
+    expected_keys = {
+        "random_seed",
+        "n_splits",
+        "num_boost_round",
+        "early_stopping_rounds",
+        "model_threads",
+        "lightgbm_params",
+        "xgboost_params",
+        "folds",
+    }
+    if not isinstance(config, dict) or set(config) != expected_keys:
+        return False
+    positive_integer_fields = (
+        "n_splits",
+        "num_boost_round",
+        "early_stopping_rounds",
+        "model_threads",
+    )
+    if config.get("random_seed") != 42 or any(
+        isinstance(config.get(field), bool)
+        or not isinstance(config.get(field), int)
+        or config[field] <= 0
+        for field in positive_integer_fields
+    ):
+        return False
+    if (
+        config["n_splits"] != 5
+        or config["model_threads"] != PRODUCTION_MODEL_THREADS
+    ):
+        return False
+    lightgbm_params = config.get("lightgbm_params")
+    xgboost_params = config.get("xgboost_params")
+    if (
+        not isinstance(lightgbm_params, dict)
+        or not isinstance(xgboost_params, dict)
+        or lightgbm_params.get("objective") != "binary"
+        or lightgbm_params.get("seed") != 42
+        or lightgbm_params.get("num_threads") != PRODUCTION_MODEL_THREADS
+        or xgboost_params.get("objective") != "binary:logistic"
+        or xgboost_params.get("seed") != 42
+        or xgboost_params.get("nthread") != PRODUCTION_MODEL_THREADS
+    ):
+        return False
+    folds = config.get("folds")
+    if not isinstance(folds, list) or len(folds) != config["n_splits"]:
+        return False
+    if {row.get("fold") for row in folds if isinstance(row, dict)} != set(
+        range(1, config["n_splits"] + 1)
+    ):
+        return False
+    for row in folds:
+        if set(row) != {
+            "fold",
+            "lightgbm_best_iteration",
+            "xgboost_best_iteration",
+        }:
+            return False
+        for field in ("lightgbm_best_iteration", "xgboost_best_iteration"):
+            value = row.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 < value <= config["num_boost_round"]
+            ):
+                return False
+    return True
 
 
 def load_oof_artifacts(output_dir, require_full=False, source_data_dir=None):

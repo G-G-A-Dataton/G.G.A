@@ -45,7 +45,7 @@ def cross_fitted_threshold_evaluation(y_true, probabilities, fold_ids):
         validation = fold_ids == fold
         selection = ~validation
         threshold, selection_score, _ = find_best_threshold(
-            y_true[selection], probabilities[selection]
+            y_true[selection], probabilities[selection], return_results=False
         )
         fold_predictions = (probabilities[validation] >= threshold).astype(np.int8)
         cross_fitted_predictions[validation] = fold_predictions
@@ -61,7 +61,7 @@ def cross_fitted_threshold_evaluation(y_true, probabilities, fold_ids):
             }
         )
     deploy_threshold, all_oof_selection_score, _ = find_best_threshold(
-        y_true, probabilities
+        y_true, probabilities, return_results=False
     )
     validation_scores = [row["validation_macro_f1"] for row in fold_results]
     return {
@@ -304,7 +304,9 @@ def _select_blend(y_true, first, second, weights):
     candidates = []
     for weight in weights:
         probabilities = weight * first + (1.0 - weight) * second
-        threshold, score, _ = find_best_threshold(y_true, probabilities)
+        threshold, score, _ = find_best_threshold(
+            y_true, probabilities, return_results=False
+        )
         candidates.append((float(score), float(weight), float(threshold)))
     score, weight, threshold = min(
         candidates,

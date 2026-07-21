@@ -15,6 +15,9 @@ from src.oof_artifacts import (
     EXPECTED_TRAINING_ROWS,
     EXPECTED_TRAINING_TERMS,
     OOF_FILENAMES,
+    PRODUCTION_CANDIDATE_SAMPLING,
+    PRODUCTION_EARLY_STOPPING_ROUNDS,
+    PRODUCTION_NUM_BOOST_ROUND,
     load_oof_artifacts,
     validate_oof_artifacts,
     write_oof_manifest,
@@ -58,7 +61,10 @@ class OofArtifactContractTests(unittest.TestCase):
             candidate_config={
                 "min_candidates": 100,
                 "dense_multiplier": 2.0,
+                "bm25_hard_fraction": 0.20,
                 "category_hard_fraction": 0.5,
+                "bm25_top_n": 200,
+                "bm25_max_df_ratio": 0.15,
                 "random_state": 42,
             },
             positive_reference_rows=EXPECTED_POSITIVE_ROWS,
@@ -72,12 +78,52 @@ class OofArtifactContractTests(unittest.TestCase):
             support_files=self.support_files,
             code_revision="a" * 40,
             feature_columns=MODEL_FEATURE_COLS,
+            training_config={
+                "random_seed": 42,
+                "n_splits": 5,
+                "num_boost_round": (
+                    PRODUCTION_NUM_BOOST_ROUND if is_full else 200
+                ),
+                "early_stopping_rounds": (
+                    PRODUCTION_EARLY_STOPPING_ROUNDS if is_full else 30
+                ),
+                "model_threads": 8,
+                "lightgbm_params": {
+                    "objective": "binary",
+                    "seed": 42,
+                    "num_threads": 8,
+                },
+                "xgboost_params": {
+                    "objective": "binary:logistic",
+                    "seed": 42,
+                    "nthread": 8,
+                },
+                "folds": [
+                    {
+                        "fold": fold,
+                        "lightgbm_best_iteration": 100,
+                        "xgboost_best_iteration": 100,
+                    }
+                    for fold in range(1, 6)
+                ],
+            },
         )
 
     def test_accepts_hash_verified_grouped_oof_artifacts(self):
         self.write_manifest()
         manifest = validate_oof_artifacts(self.temp_dir.name)
         self.assertEqual(manifest["validation"]["group_column"], "term_id")
+
+    def test_final_config_matches_production_candidate_contract(self):
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(
+            os.path.join(project_root, "configs", "final_v1.json"),
+            encoding="utf-8",
+        ) as config_file:
+            config = json.load(config_file)
+        self.assertEqual(
+            config["candidate_sampling"], PRODUCTION_CANDIDATE_SAMPLING
+        )
 
     def test_loader_checks_array_shapes_values_and_folds(self):
         arrays = {
@@ -135,6 +181,18 @@ class OofArtifactContractTests(unittest.TestCase):
             file.write(b"tampered")
         with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
             validate_oof_artifacts(self.temp_dir.name, require_full=True)
+
+    def test_rejects_tampered_model_training_config(self):
+        self.write_manifest()
+        manifest_path = os.path.join(self.temp_dir.name, "oof_manifest.json")
+        with open(manifest_path, encoding="utf-8") as manifest_file:
+            manifest = json.load(manifest_file)
+        manifest["model_training"]["model_threads"] = -1
+        with open(manifest_path, "w", encoding="utf-8") as manifest_file:
+            json.dump(manifest, manifest_file)
+
+        with self.assertRaisesRegex(ValueError, "training configuration"):
+            validate_oof_artifacts(self.temp_dir.name)
 
     def test_production_consumers_reject_stale_feature_columns(self):
         self.write_manifest()

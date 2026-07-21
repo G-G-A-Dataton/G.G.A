@@ -6,9 +6,9 @@ Only reproducible local evidence is recorded here. Sample scores validate pipeli
 
 | Check | Result |
 |---|---|
-| Unit/integration suite | 78/78 passed |
+| Current unit/integration suite | 114/114 passed |
 | Python | 3.13.5 verified |
-| Direct package pins | 17/17 exact |
+| Hash-locked environment | 158/158 exact; direct pins preserved |
 | Frozen competition files | 5/5 row/schema/size/SHA-256 checks passed |
 | Full submission input | 3,359,679 rows and sample ID order verified |
 
@@ -73,10 +73,93 @@ The feature-importance consumer also loaded all five verified LightGBM folds and
 | Peak RSS | approximately 140 MB |
 | Indexed tokens | 33,751 |
 
-## Not Yet Evidence
+## Full Production Acceptance
 
-- Full 17,968-term dual-model training and 3,359,679-row final submission
-- Full optional embedding generation and grouped full-data ablation
-- Kaggle public/private leaderboard scores
+Training and inference ran from clean revision
+`f22e1e66a1e06879d29905637ecbfe6c0cfc6604`.
 
-These items cannot be described as complete until their manifests, logs, and external scores exist.
+| Field | Result |
+|---|---|
+| Complete training terms | 17,968 |
+| Positive / negative rows | 250,000 / 1,627,700 |
+| Total training candidates | 1,877,700 |
+| Negative sources | 316,893 BM25 / 814,401 category / 496,406 random |
+| Models | 5 LightGBM + 5 XGBoost |
+| Feature contract | 33 features |
+| LightGBM cross-fitted Macro-F1 | 0.837304 |
+| XGBoost cross-fitted Macro-F1 | 0.836820 |
+| Blend cross-fitted Macro-F1 | **0.837508** |
+| Selected deploy rule | 0.65 LightGBM + 0.35 XGBoost; threshold 0.37181571 |
+| Training wall time | 48:28.11 |
+| Training peak RSS | 3,765,812 KB; no swap |
+| Submission rows | 3,359,679 |
+| Positive predictions | 645,783 (19.2216%) |
+| Submission QA | schema, binary values, unique/exact ID order, row count, and atomic publication passed |
+| Selection/inference wall time | 1:11.70 |
+| Selection/inference peak RSS | 701,084 KB |
+
+Every accepted fold stopped before the 3,000-round ceiling. LightGBM best
+iterations were 2,526, 2,056, 2,071, 1,981, and 2,464; XGBoost best iterations
+were 2,253, 1,901, 2,070, 1,963, and 2,232.
+
+## Delivery Integrity
+
+| Artifact | SHA-256 |
+|---|---|
+| `outputs/submission_v2.csv` | `2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c` |
+| `outputs/submission_v2.manifest.json` | `972c0fbada3be885d993e13010c501c338ba86b8d8e62eccc8d3d51423c4a94e` |
+| `outputs/ensemble_artifacts/oof_manifest.json` | `fdb9582e4cef39572059b7731b44e473d78adbcfe75d08398c8c39e3258f9eb9` |
+| `outputs/ensemble_artifacts/ensemble_decision.json` | `7aab740498895f6b60df182cef5c2401c9b0173a152049224b7159395cdfccc4` |
+
+The full OOF consumer independently reloaded and verified all hashes, source
+data, feature columns, fold IDs, array shapes, and full-mode row counts.
+
+## Full Offline Model-Loading Inference
+
+The 17 July `step3` acceptance loaded all ten serialized fold models and the
+TF-IDF vectorizer, rebuilt the complete test feature matrix out of core, and
+predicted 3,359,679 rows without cached test probabilities. It produced
+645,783 positives and the exact accepted SHA-256
+`2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c`.
+
+## Clean-Environment Reproducibility
+
+The 16 July dry-run executed from clean revision
+`ec619e29702503bbe4db8147a4c30a0a10daecda` in a fresh Python 3.13.5 virtual
+environment with all 158 hash-locked packages installed.
+
+| Field | Result |
+|---|---|
+| Source isolation | Detached local clone; clean tracked state |
+| Network-dependent model access | Disabled |
+| User-site packages | Disabled |
+| Compile / tests | passed / 102 of 102 passed |
+| Data freeze / pipeline / delivery manifest | passed / passed / passed |
+| Reproduced submission | 3,359,679 rows; 645,783 positives; QA passed |
+| Byte identity | accepted and reproduced SHA-256 both `2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c` |
+
+The machine-readable local record is intentionally ignored; the committed
+evidence is [`reproducibility_dry_run.md`](reproducibility_dry_run.md).
+
+## Final Candidate Packaging
+
+The 16 July packaging run used clean revision
+`212b296cf9988444e7b06531e0e23b71994411f1` and the accepted full OOF artifact
+revision `f22e1e66a1e06879d29905637ecbfe6c0cfc6604`.
+
+| Rank | Strategy | Cross-fitted Macro-F1 | Positive rows | SHA-256 | QA |
+|---:|---|---:|---:|---|---|
+| 1 | 0.65 LGB / 0.35 XGB | 0.837508 | 645,783 | `2ecfcb051291582e025f303a9e1e16c985c297b0c4ec8cf15f47716892e7fe4c` | passed; accepted hash match |
+| 2 | LightGBM | 0.837304 | 634,316 | `c9407c965ad7ba047441aa44952dab4681a13e23d32fb494b1c31545c83052e7` | passed |
+
+Both files contain 3,359,679 exact-order unique IDs and valid integer binary
+predictions. They disagree on 21,647 rows (`0.6443%`).
+
+## External Or Conditional Evidence
+
+- Full sentence embeddings and their grouped ablation require a local model
+  checkpoint and are not part of the accepted feature contract.
+- Kaggle public/private leaderboard scores require team-account access.
+
+Neither item may be inferred from local validation or represented as complete
+until its own artifacts or external record exists.

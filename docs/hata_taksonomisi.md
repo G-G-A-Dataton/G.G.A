@@ -5,7 +5,8 @@
 > predate grouped validation and the corrected attribute parser. Counts below
 > must not be treated as current model behavior.
 > Current runner: `python scripts/analysis/run_hata_taksonomisi.py`; new results
-> are written to `docs/error_taxonomy.md` using fold-specific decisions.
+> are recorded in `docs/error_taxonomy.md` using fold-specific decisions and
+> exact manifest-backed candidate reconstruction.
 
 **Hazırlayan:** Ahmet Emin Işın  
 **Tarih:** 12 Temmuz 2026  
