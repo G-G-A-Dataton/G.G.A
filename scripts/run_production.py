@@ -76,7 +76,7 @@ def main(argv=None):
                 ]
             )
         else:
-            run([python, "pipeline/inference.py", "--mode", "predict"])
+            run([python, "scripts/submission/run_pipeline.py", "--mode", "predict"])
 
 
 if __name__ == "__main__":
