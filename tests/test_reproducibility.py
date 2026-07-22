@@ -23,7 +23,10 @@ class ReproducibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             link = Path(directory) / "venv" / "bin" / "python"
             link.parent.mkdir(parents=True)
-            link.symlink_to(sys.executable)
+            try:
+                link.symlink_to(sys.executable)
+            except OSError:
+                self.skipTest("Windows environment requires elevated privileges for symlinks")
 
             self.assertEqual(interpreter_path(link), Path(os.path.abspath(link)))
             self.assertNotEqual(interpreter_path(link), link.resolve())

@@ -140,6 +140,10 @@ class SolutionDeliveryTests(unittest.TestCase):
             self.assertEqual(actual, expected)
 
     def test_all_official_entrypoints_expose_required_arguments(self):
+        import shutil
+        if not shutil.which("bash"):
+            self.skipTest("bash is not available in PATH on this platform")
+
         expected = {
             "step1.sh": "--env-path",
             "step2.sh": "--competition_data_path",
