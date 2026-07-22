@@ -2,7 +2,7 @@ import os
 import sys
 import time
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -16,7 +16,8 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     
     print("Veri yükleniyor...")
-    items_df = load_items()
+    items_path = os.path.join(PROJECT_ROOT, "datasets", "items.csv")
+    items_df = load_items(items_path)
     
     print("BM25 Index inşa ediliyor (max_df_ratio=0.3)...")
     start_time = time.time()

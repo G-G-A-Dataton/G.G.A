@@ -142,3 +142,17 @@ class BM25Retriever:
         for term_id, query_text in queries:
             res[term_id] = self.retrieve(query_text, k=k)
         return res
+
+    def save(self, path: str) -> None:
+        """İndeksi pickle dosyası olarak kaydeder."""
+        import pickle
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, path: str) -> "BM25Retriever":
+        """Kaydedilmiş pickle indeksini yükler."""
+        import pickle
+        with open(path, "rb") as f:
+            return pickle.load(f)
