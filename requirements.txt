@@ -4,32 +4,32 @@ numpy==2.4.0
 pyarrow==16.1.0           # Parquet desteği (golden test set, hard negative pool)
 
 # === Makine Öğrenmesi ===
-scikit-learn==1.9.0
+scikit-learn==1.5.1
 lightgbm==4.6.0
-xgboost==3.3.0
+xgboost==2.0.3
 optuna==3.6.1             # Hyperparameter optimizasyonu
 
 # === Retrieval ===
 faiss-cpu==1.8.0          # FAISS dense retrieval (~1M item embedding için ANN)
 
 # === NLP & Embedding ===
-sentence-transformers==5.6.0
+sentence-transformers==3.0.1
 rank_bm25==0.2.2
-transformers==5.12.1
-tokenizers==0.22.2
+transformers==4.40.0
+tokenizers==0.15.1
 
 # === Deep Learning Backend ===
-torch==2.12.1
-accelerate==1.14.0
+torch==2.1.0
+accelerate==0.27.2
 
 # === MLOps ===
-mlflow==2.15.1            # Deney takibi + model registry
+mlflow==2.11.3            # Deney takibi + model registry
 dvc==3.51.2               # Dataset versioning
 pydantic==2.7.1           # Config ve schema validasyonu
 pyyaml==6.0.2             # YAML config dosyaları için
 
 # === Görselleştirme ===
-matplotlib==3.11.0
+matplotlib==3.8.4
 seaborn==0.13.2
 
 # === Test ===
@@ -42,4 +42,4 @@ ipykernel==7.3.0
 
 # === Yardımcı ===
 tqdm==4.68.3
-scipy==1.18.0
+scipy==1.13.1
