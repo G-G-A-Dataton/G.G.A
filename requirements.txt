@@ -1,6 +1,6 @@
 # === Veri İşleme ===
 pandas==3.0.3
-numpy==2.5.0
+numpy==2.4.0
 pyarrow==16.1.0           # Parquet desteği (golden test set, hard negative pool)
 
 # === Makine Öğrenmesi ===
