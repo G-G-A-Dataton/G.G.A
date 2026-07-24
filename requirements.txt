@@ -15,8 +15,8 @@ faiss-cpu==1.8.0          # FAISS dense retrieval (~1M item embedding için ANN)
 # === NLP & Embedding ===
 sentence-transformers==3.0.1
 rank_bm25==0.2.2
-transformers==4.40.0
-tokenizers==0.15.1
+transformers==4.35.2
+tokenizers==0.15.0
 
 # === Deep Learning Backend ===
 torch==2.1.0
